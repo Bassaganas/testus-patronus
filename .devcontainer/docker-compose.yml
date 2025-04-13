@@ -9,7 +9,9 @@ services:
     volumes:
       - ..:/workspace:cached
     command: sleep infinity
-    network_mode: service:chroma
+    ports:
+      - "8000:8000"
+      - "3000:3000"
 
   chroma:
     image: chromadb/chroma:latest
