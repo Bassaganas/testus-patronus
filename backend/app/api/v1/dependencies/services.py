@@ -5,11 +5,15 @@ from app.services.project_service import ProjectService
 from .vector_store import get_vector_store
 from .rag_chain import get_rag_chain
 from .document_processor import get_document_processor
+from app.db.session import get_db
+from fastapi import Depends
+from sqlalchemy.orm import Session
 
 @lru_cache()
-def get_document_service() -> DocumentService:
+def get_document_service(db: Session = Depends(get_db)) -> DocumentService:
     """Get or create a DocumentService instance."""
     return DocumentService(
+        db=db,
         vector_store=get_vector_store(),
         doc_processor=get_document_processor()
     )

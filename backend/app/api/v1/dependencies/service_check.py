@@ -31,8 +31,11 @@ async def check_services() -> Dict[str, str]:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
+                f"{settings.AZURE_OPENAI_ENDPOINT}/openai/deployments",
+                headers={
+                    "api-key": settings.AZURE_OPENAI_API_KEY,
+                    "api-version": settings.AZURE_OPENAI_API_VERSION
+                },
                 timeout=5.0
             )
             if response.status_code == 200:

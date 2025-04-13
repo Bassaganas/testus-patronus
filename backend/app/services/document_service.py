@@ -41,17 +41,33 @@ class DocumentService:
         """Upload and process a new document."""
         try:
             # Process document using document processor
-            processed_doc = await self.doc_processor.process_document(
+            processed_doc = await self.doc_processor.process_upload(
                 file=file,
                 vector_store=self.vector_store,
                 conversation_id=conversation_id,
                 project_id=project_id
             )
             
+            # Convert Pydantic model to SQLAlchemy model for database storage
+            from app.db.models import Document as SQLAlchemyDocument
+            db_document = SQLAlchemyDocument(
+                id=processed_doc.id,
+                title=processed_doc.title,
+                file_name=processed_doc.file_name,
+                file_type=processed_doc.file_type,
+                file_size=processed_doc.file_size,
+                content=processed_doc.content,
+                doc_metadata=processed_doc.metadata,
+                project_id=processed_doc.project_id,
+                conversation_id=processed_doc.conversation_id,
+                created_at=processed_doc.created_at,
+                updated_at=processed_doc.updated_at
+            )
+            
             # Create document in database
-            self.db.add(processed_doc)
+            self.db.add(db_document)
             self.db.commit()
-            self.db.refresh(processed_doc)
+            self.db.refresh(db_document)
             
             return processed_doc
             
@@ -64,10 +80,16 @@ class DocumentService:
         db_document = await self.get_document(document_id)
         
         # Update fields
-        for key, value in document.dict(exclude={'id'}).items():
-            setattr(db_document, key, value)
-        
+        db_document.title = document.title
+        db_document.file_name = document.file_name
+        db_document.file_type = document.file_type
+        db_document.file_size = document.file_size
+        db_document.content = document.content
+        db_document.doc_metadata = document.metadata
+        db_document.project_id = document.project_id
+        db_document.conversation_id = document.conversation_id
         db_document.updated_at = datetime.utcnow()
+        
         self.db.commit()
         self.db.refresh(db_document)
         

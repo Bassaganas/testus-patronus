@@ -1,11 +1,11 @@
-from pydantic import BaseModel, Field, constr, ConfigDict
-from typing import List, Optional
+from pydantic import BaseModel, Field, ConfigDict, StringConstraints
+from typing import List, Optional, Annotated
 from datetime import datetime
 from uuid import uuid4
 
 class ProjectBase(BaseModel):
-    title: constr(min_length=1, max_length=100)
-    description: Optional[constr(max_length=1000)] = None
+    title: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    description: Optional[Annotated[str, StringConstraints(max_length=1000)]] = None
 
 class ProjectCreate(ProjectBase):
     pass

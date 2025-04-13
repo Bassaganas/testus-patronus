@@ -1,53 +1,70 @@
 from typing import List
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load the appropriate .env file based on environment
+env_file = ".env.development" if os.getenv("ENV") == "development" else ".env"
+load_dotenv(env_file)
 
 class Settings(BaseSettings):
     # Azure OpenAI Configuration
-    AZURE_OPENAI_API_KEY: str
     AZURE_OPENAI_ENDPOINT: str
-    AZURE_OPENAI_DEPLOYMENT_NAME: str  # For chat completion
-    AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT: str = "text-embedding-ada-002"  # For embeddings
+    
+    # Embeddings Configuration
+    AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT: str
+    AZURE_OPENAI_EMBEDDINGS_API_KEY: str
     AZURE_OPENAI_API_VERSION: str
-    MAX_TOKENS: int = 1000
-
+    
+    # Chat Configuration
+    AZURE_OPENAI_CHAT_DEPLOYMENT_NAME: str
+    AZURE_OPENAI_CHAT_API_KEY: str
+    AZURE_OPENAI_CHAT_API_VERSION: str
+    
     # Vector Store Configuration
-    VECTOR_STORE_PATH: str
-
+    VECTOR_STORE_DIR: str
+    
     # Server Configuration
     HOST: str
     PORT: int
     DEBUG: bool
-
+    
     # CORS Configuration
     ALLOWED_ORIGINS: str
-
-    # Vector DB Settings
-    CHROMA_PERSIST_DIRECTORY: str = "data/chroma"
     
-    # Document Processing Settings
-    SUPPORTED_DOCUMENT_TYPES: list = ["pdf", "txt", "md", "html"]
-    MAX_DOCUMENT_SIZE_MB: int = 10
-    
-    # RAG Settings
+    # Additional Configuration
     CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    CHUNK_OVERLAP: int = 100
+    MAX_TOKENS: int = 1000
+    MAX_DOCUMENT_SIZE_MB: int = 10
+    SUPPORTED_DOCUMENT_TYPES: str = "pdf,txt,md,html"
     
-    #DB Settings
-    DB_PATH: str = "data/db"
+    # DB Settings
+    DB_PATH: str
     DATABASE_URL: str
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
+    
+    model_config = SettingsConfigDict(
+        env_file=env_file,
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        validate_default=True
+    )
+    
     @property
     def origins(self) -> List[str]:
-        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
+        """Parse ALLOWED_ORIGINS into a list."""
+        try:
+            # Try to parse as JSON first
+            import json
+            return json.loads(self.ALLOWED_ORIGINS)
+        except json.JSONDecodeError:
+            # Fall back to comma-separated string
+            return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
+    
+    @property
+    def supported_document_types(self) -> List[str]:
+        """Parse SUPPORTED_DOCUMENT_TYPES into a list."""
+        return [doc_type.strip() for doc_type in self.SUPPORTED_DOCUMENT_TYPES.split(",")]
 
 settings = Settings() 

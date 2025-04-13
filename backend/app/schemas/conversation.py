@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -25,6 +25,4 @@ class ConversationResponse(ConversationBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        """Pydantic configuration."""
-        from_attributes = True 
+    model_config = ConfigDict(from_attributes=True) 

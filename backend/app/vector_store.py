@@ -1,12 +1,13 @@
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_openai import AzureOpenAIEmbeddings
-from langchain_core.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import shutil
 import os
 import logging
 from .config import settings
+import time
+from pathlib import Path
 
 # Get logger
 logger = logging.getLogger("testus-patronus")
@@ -21,31 +22,47 @@ class VectorStoreManager:
             # Remove trailing slash from endpoint if present
             azure_endpoint = settings.AZURE_OPENAI_ENDPOINT.rstrip('/')
             
+            # Use embeddings API key
+            api_key = settings.AZURE_OPENAI_EMBEDDINGS_API_KEY
+            
             self.embeddings = AzureOpenAIEmbeddings(
                 azure_endpoint=azure_endpoint,
-                api_key=settings.AZURE_OPENAI_API_KEY,
-                api_version=settings.AZURE_OPENAI_API_VERSION,
-                deployment=settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT
+                openai_api_key=api_key,
+                openai_api_version=settings.AZURE_OPENAI_API_VERSION,
+                deployment=settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
+                chunk_size=16  # Optimize for Azure OpenAI
             )
             
             # Create vector store directory if it doesn't exist
-            os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
+            self.vector_store_dir = Path(settings.VECTOR_STORE_DIR)
+            self.vector_store_dir.mkdir(parents=True, exist_ok=True)
             
-            # Initialize the vector store
-            self.vectorstore = Chroma(
-                persist_directory=settings.VECTOR_STORE_PATH,
-                embedding_function=self.embeddings
+            # Initialize vector store with cosine similarity
+            self.vector_store = Chroma(
+                persist_directory=str(self.vector_store_dir),
+                embedding_function=self.embeddings,
+                collection_metadata={"hnsw:space": "cosine"}
             )
             
-            # Initialize text splitter
-            self.text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=settings.CHUNK_SIZE,
-                chunk_overlap=settings.CHUNK_OVERLAP
-            )
-            logger.info("Vector store initialized successfully")
+            logger.info("Vector store manager initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing embeddings: {str(e)}")
             raise
+    
+    def health_check(self) -> bool:
+        """
+        Perform a health check on the vector store.
+        
+        Returns:
+            bool: True if the vector store is healthy, False otherwise
+        """
+        try:
+            # Try to embed a simple test string
+            test_embedding = self.embeddings.embed_query("Test health check")
+            return len(test_embedding) > 0
+        except Exception as e:
+            logger.error(f"Health check failed: {str(e)}")
+            return False
     
     def add_documents(self, documents: List[Document], document_id: Optional[str] = None) -> None:
         """
@@ -61,23 +78,33 @@ class VectorStoreManager:
             if document_id:
                 logger.info(f"Document ID: {document_id}")
             
-            # Split documents into chunks
-            splits = self.text_splitter.split_documents(documents)
-            logger.info(f"Split into {len(splits)} chunks")
-            
-            # Add document_id to metadata if provided
+            # Add metadata if document_id is provided
             if document_id:
-                for split in splits:
-                    if not isinstance(split.metadata, dict):
-                        split.metadata = {}
-                    split.metadata["document_id"] = document_id
+                for doc in documents:
+                    if not doc.metadata:
+                        doc.metadata = {}
+                    doc.metadata["document_id"] = document_id
             
-            # Add to vector store
-            self.vectorstore.add_documents(splits)
+            # Add to vector store with better error handling and retries
+            max_retries = 3
+            retry_delay = 2  # seconds
             
-            # Persist the vector store
-            self.vectorstore.persist()
-            logger.info(f"Successfully added documents to vector store")
+            for attempt in range(max_retries):
+                try:
+                    self.vector_store.add_documents(documents)
+                    # Note: Chroma automatically persists changes, no need to call persist()
+                    logger.info(f"Successfully added documents to vector store")
+                    return  # Success, exit the function
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt+1}/{max_retries} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"All {max_retries} attempts failed. Last error: {str(e)}")
+                        raise
+            
         except Exception as e:
             logger.error(f"Error adding documents to vector store: {str(e)}")
             raise
@@ -86,17 +113,18 @@ class VectorStoreManager:
         """Reset the vector store by deleting all documents."""
         try:
             logger.info("Resetting vector store")
-            if os.path.exists(settings.VECTOR_STORE_PATH):
-                shutil.rmtree(settings.VECTOR_STORE_PATH)
-                logger.info(f"Deleted vector store directory: {settings.VECTOR_STORE_PATH}")
+            if os.path.exists(settings.VECTOR_STORE_DIR):
+                shutil.rmtree(settings.VECTOR_STORE_DIR)
+                logger.info(f"Deleted vector store directory: {settings.VECTOR_STORE_DIR}")
             
-            os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
-            logger.info(f"Created new vector store directory: {settings.VECTOR_STORE_PATH}")
+            os.makedirs(settings.VECTOR_STORE_DIR, exist_ok=True)
+            logger.info(f"Created new vector store directory: {settings.VECTOR_STORE_DIR}")
             
-            # Reinitialize the vector store
-            self.vectorstore = Chroma(
-                persist_directory=settings.VECTOR_STORE_PATH,
-                embedding_function=self.embeddings
+            # Reinitialize the vector store with better configuration
+            self.vector_store = Chroma(
+                persist_directory=str(self.vector_store_dir),
+                embedding_function=self.embeddings,
+                collection_metadata={"hnsw:space": "cosine"}
             )
             logger.info("Vector store reset successful")
         except Exception as e:
@@ -108,7 +136,8 @@ class VectorStoreManager:
         query: str, 
         k: int = 4, 
         conversation_id: Optional[str] = None,
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        score_threshold: float = 0.7
     ) -> List[Document]:
         """
         Perform a similarity search on the vector store.
@@ -118,13 +147,14 @@ class VectorStoreManager:
             k: Number of results to return
             conversation_id: Limit results to a specific conversation
             project_id: Limit results to a specific project
+            score_threshold: Minimum similarity score threshold
             
         Returns:
             List of Document objects
         """
         try:
             # Build filter based on conversation or project
-            filter_dict = {}
+            filter_dict: Dict[str, Any] = {}
             if conversation_id:
                 filter_dict["conversation_id"] = conversation_id
                 logger.info(f"Filtering search by conversation_id: {conversation_id}")
@@ -135,19 +165,30 @@ class VectorStoreManager:
             # Log the search query
             logger.info(f"Performing similarity search with query: '{query[:50]}...' (k={k})")
             
-            # Perform search with filter if needed
+            # Perform search with filter and score threshold
+            search_kwargs = {
+                "k": k,
+                "score_threshold": score_threshold
+            }
             if filter_dict:
+                search_kwargs["filter"] = filter_dict
                 logger.info(f"Using filter: {filter_dict}")
-                results = self.vectorstore.similarity_search(
-                    query, 
-                    k=k,
-                    filter=filter_dict
-                )
-            else:
-                results = self.vectorstore.similarity_search(query, k=k)
             
-            logger.info(f"Search returned {len(results)} results")
-            return results
+            results = self.vector_store.similarity_search_with_score(
+                query,
+                **search_kwargs
+            )
+            
+            # Convert results to Document objects with scores in metadata
+            documents = []
+            for doc, score in results:
+                if not doc.metadata:
+                    doc.metadata = {}
+                doc.metadata["score"] = score
+                documents.append(doc)
+            
+            logger.info(f"Search returned {len(documents)} results")
+            return documents
         except Exception as e:
             logger.error(f"Error in similarity search: {str(e)}")
             raise
@@ -164,11 +205,25 @@ class VectorStoreManager:
         """
         try:
             logger.info(f"Retrieving document chunks for document_id: {document_id}")
-            results = self.vectorstore.get(
-                where={"document_id": document_id}
+            results = self.vector_store.get(
+                where={"document_id": document_id},
+                include=["documents", "metadatas", "distances"]
             )
-            logger.info(f"Retrieved {len(results)} chunks for document {document_id}")
-            return results
+            
+            # Convert results to Document objects with scores
+            documents = []
+            for doc, metadata, distance in zip(
+                results["documents"],
+                results["metadatas"],
+                results["distances"]
+            ):
+                if not metadata:
+                    metadata = {}
+                metadata["score"] = 1 - distance  # Convert distance to similarity score
+                documents.append(Document(page_content=doc, metadata=metadata))
+            
+            logger.info(f"Retrieved {len(documents)} chunks for document {document_id}")
+            return documents
         except Exception as e:
             logger.error(f"Error retrieving document chunks: {str(e)}")
             raise
@@ -182,9 +237,10 @@ class VectorStoreManager:
         """
         try:
             logger.info(f"Deleting document chunks for document_id: {document_id}")
-            self.vectorstore.delete(
+            self.vector_store.delete(
                 where={"document_id": document_id}
             )
+            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for document {document_id}")
         except Exception as e:
             logger.error(f"Error deleting document chunks: {str(e)}")
@@ -199,9 +255,10 @@ class VectorStoreManager:
         """
         try:
             logger.info(f"Deleting document chunks for conversation_id: {conversation_id}")
-            self.vectorstore.delete(
+            self.vector_store.delete(
                 where={"conversation_id": conversation_id}
             )
+            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for conversation {conversation_id}")
         except Exception as e:
             logger.error(f"Error deleting conversation documents: {str(e)}")
@@ -216,9 +273,10 @@ class VectorStoreManager:
         """
         try:
             logger.info(f"Deleting document chunks for project_id: {project_id}")
-            self.vectorstore.delete(
+            self.vector_store.delete(
                 where={"project_id": project_id}
             )
+            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for project {project_id}")
         except Exception as e:
             logger.error(f"Error deleting project documents from vector store: {str(e)}")
@@ -230,7 +288,8 @@ class VectorStoreManager:
         """
         try:
             logger.info("Deleting entire vector store collection")
-            self.vectorstore.delete_collection()
+            self.vector_store.delete_collection()
+            self.vector_store.persist()  # Ensure changes are persisted
             logger.info("Collection deleted successfully")
         except Exception as e:
             logger.error(f"Error deleting collection: {str(e)}")

@@ -1,17 +1,17 @@
 from typing import List, Dict, Any, Optional
-from langchain_core.chains import RetrievalQA
 from langchain_openai import AzureChatOpenAI
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
+from langchain_openai import AzureOpenAIEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel, RunnableLambda
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import HumanMessage, SystemMessage
 from .config import settings
 from .vector_store import VectorStoreManager
-from langchain_core.chains import ConversationalRetrievalChain
-from langchain_core.memory import ConversationBufferMemory
 from .services.database import db
 from .models import Message
 import logging
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
 
 # Get logger
 logger = logging.getLogger("testus-patronus")
@@ -24,45 +24,70 @@ class RAGChain:
             self.vector_store = vector_store
             
             # Initialize Azure OpenAI
-            logger.info(f"Setting up Azure OpenAI with deployment: {settings.AZURE_OPENAI_DEPLOYMENT_NAME}")
+            logger.info(f"Setting up Azure OpenAI with deployment: {settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME}")
+            logger.info(f"Using chat API version: {settings.AZURE_OPENAI_CHAT_API_VERSION}")
+            
+            # Remove trailing slash from endpoint if present
+            azure_endpoint = settings.AZURE_OPENAI_ENDPOINT.rstrip('/')
+            
+            # Use chat API key
+            api_key = settings.AZURE_OPENAI_CHAT_API_KEY
+            
+            # Use chat deployment name
+            deployment_name = settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+            
             self.llm = AzureChatOpenAI(
-                deployment_name=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-                openai_api_version=settings.AZURE_OPENAI_API_VERSION,
-                azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                api_key=settings.AZURE_OPENAI_API_KEY,
+                azure_endpoint=azure_endpoint,
+                openai_api_key=api_key,
+                openai_api_version=settings.AZURE_OPENAI_CHAT_API_VERSION,
+                deployment_name=deployment_name,
                 temperature=0.7,
-                max_tokens=settings.MAX_TOKENS
+                max_tokens=4000
             )
             
-            self.memory = ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True
+            # Create the prompt template using ChatPromptTemplate with message history support
+            self.prompt_template = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are a helpful AI assistant that answers questions based on the provided context.\nUse the following pieces of context to answer the question at the end.\nIf you don't know the answer, just say that you don't know, don't try to make up an answer."),
+                MessagesPlaceholder(variable_name="chat_history"),
+                HumanMessage(content="Context: {context}\n\nQuestion: {question}")
+            ])
+            
+            # Initialize the retriever with better search parameters
+            logger.info("Initializing retriever")
+            self.retriever = self.vector_store.vectorstore.as_retriever(
+                search_type="similarity",
+                search_kwargs={
+                    "k": 4,
+                    "score_threshold": 0.7
+                }
             )
             
-            # Create the prompt template
-            self.prompt_template = PromptTemplate(
-                template="""You are a helpful AI assistant that answers questions based on the provided context.
-                Use the following pieces of context to answer the question at the end.
-                If you don't know the answer, just say that you don't know, don't try to make up an answer.
-                
-                Context: {context}
-                
-                Question: {question}
-                
-                Answer: """,
-                input_variables=["context", "question"]
+            # Format retrieved documents with metadata
+            def format_docs(docs: List[Document]) -> str:
+                formatted_docs = []
+                for doc in docs:
+                    content = doc.page_content
+                    if doc.metadata:
+                        source = doc.metadata.get("source", "Unknown source")
+                        formatted_docs.append(f"Content: {content}\nSource: {source}")
+                    else:
+                        formatted_docs.append(content)
+                return "\n\n".join(formatted_docs)
+            
+            # Define the RAG chain using LCEL with better error handling
+            self.qa_chain = (
+                RunnableParallel(
+                    {
+                        "context": self.retriever | RunnableLambda(format_docs),
+                        "question": RunnablePassthrough(),
+                        "chat_history": lambda _: []  # Default empty chat history
+                    }
+                )
+                | self.prompt_template
+                | self.llm
+                | StrOutputParser()
             )
             
-            # Initialize the QA chain
-            logger.info("Initializing QA chain")
-            self.qa_chain = RetrievalQA.from_chain_type(
-                llm=self.llm,
-                chain_type="stuff",
-                retriever=self.vector_store.vectorstore.as_retriever(
-                    search_kwargs={"k": 4}
-                ),
-                chain_type_kwargs={"prompt": self.prompt_template}
-            )
             logger.info("RAG Chain initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing RAG Chain: {str(e)}")
@@ -71,115 +96,84 @@ class RAGChain:
     def get_response(self, query: str, conversation_id: Optional[str] = None, project_id: Optional[str] = None) -> str:
         """
         Get a response to a query, optionally in the context of a conversation or project.
-        
-        Args:
-            query: The query to answer
-            conversation_id: Optional conversation ID to provide context
-            project_id: Optional project ID to provide context
-            
-        Returns:
-            A string response to the query
         """
         try:
             logger.info(f"RAG Chain processing query: '{query[:50]}...'")
-            if conversation_id:
-                logger.info(f"With conversation context: {conversation_id}")
-            if project_id:
-                logger.info(f"With project context: {project_id}")
             
             # Get conversation history if a conversation_id is provided
+            chat_history = []
             if conversation_id:
                 conversation = db.get_conversation(conversation_id)
                 if conversation and conversation.messages:
                     logger.info(f"Using conversation history with {len(conversation.messages)} messages")
+                    chat_history = [
+                        (msg.role, msg.content) 
+                        for msg in conversation.messages[-5:]  # Use last 5 messages for context
+                    ]
                 else:
                     logger.info("No conversation history found")
             
-            # Vector store query
             try:
-                # Get relevant document chunks from vector store
-                docs = self.vector_store.similarity_search(
-                    query, 
-                    k=4, 
-                    conversation_id=conversation_id,
-                    project_id=project_id
-                )
-                
-                # Log the documents we found
-                if docs:
-                    logger.info(f"Found {len(docs)} relevant documents")
-                    for i, doc in enumerate(docs):
-                        logger.debug(f"Document {i+1}: {doc.page_content[:100]}...")
-                else:
-                    logger.warning("No relevant documents found in vector store")
-                
-                # Use the QA chain to get a response
-                response = self.qa_chain.run(query=query)
-                # Output may be a dictionary or a string
-                content = response if isinstance(response, str) else response.get("result", str(response))
+                # Use the QA chain to get a response with chat history
+                content = self.qa_chain.invoke({
+                    "question": query,
+                    "chat_history": chat_history
+                })
                 logger.info(f"Generated response: '{content[:50]}...'")
                 
             except Exception as e:
-                # If vector store query fails, use direct LLM interaction
-                logger.error(f"Error accessing vector store: {str(e)}")
-                content = "I don't have access to any documents at the moment. Please try uploading some documents first."
+                logger.error(f"Error in RAG chain: {str(e)}")
+                content = "I apologize, but I encountered an error processing your request."
             
-            # Ensure we're returning a string
-            if not isinstance(content, str):
-                content = str(content)
-                
             return content
+            
         except Exception as e:
             logger.error(f"Error in get_response: {str(e)}")
             return f"I apologize, but I encountered an error: {str(e)}"
 
     def answer_question(self, question: str, conversation_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Answer a question using the RAG chain.
-        
-        Args:
-            question: The question to answer
-            conversation_id: Optional conversation context
-            project_id: Optional project context
-            
-        Returns:
-            Dictionary containing the answer and metadata
+        Answer a question using the RAG chain with document sources.
         """
         try:
-            # Get the relevant documents with context filtering
+            # Get the relevant documents with context filtering and better search parameters
             relevant_docs = self.vector_store.similarity_search(
                 question, 
+                k=4,
                 conversation_id=conversation_id,
                 project_id=project_id
             )
             
-            # Create a custom retriever that returns our pre-filtered docs
-            from langchain_core.schema.retriever import BaseRetriever
+            # Format documents with metadata
+            def format_docs(docs: List[Document]) -> str:
+                formatted_docs = []
+                for doc in docs:
+                    content = doc.page_content
+                    if doc.metadata:
+                        source = doc.metadata.get("source", "Unknown source")
+                        formatted_docs.append(f"Content: {content}\nSource: {source}")
+                    else:
+                        formatted_docs.append(content)
+                return "\n\n".join(formatted_docs)
             
-            class ContextFilteredRetriever(BaseRetriever):
-                def __init__(self, docs):
-                    self.docs = docs
-                    
-                def get_relevant_documents(self, query):
-                    return self.docs
-                    
-                async def aget_relevant_documents(self, query):
-                    return self.docs
-                    
-            filtered_retriever = ContextFilteredRetriever(relevant_docs)
-            
-            # Create a temporary QA chain with this retriever
-            temp_qa_chain = RetrievalQA.from_chain_type(
-                llm=self.llm,
-                chain_type="stuff",
-                retriever=filtered_retriever,
-                chain_type_kwargs={"prompt": self.prompt_template}
+            # Create a temporary chain for this specific query
+            temp_chain = (
+                RunnableParallel(
+                    {
+                        "context": lambda _: format_docs(relevant_docs),
+                        "question": RunnablePassthrough(),
+                        "chat_history": lambda _: []
+                    }
+                )
+                | self.prompt_template
+                | self.llm
+                | StrOutputParser()
             )
             
             # Get the answer
-            result = temp_qa_chain({"query": question})
+            answer = temp_chain.invoke(question)
             
-            # Get document sources
+            # Get document sources with better metadata handling
             sources = []
             doc_ids = set()
             for doc in relevant_docs:
@@ -192,14 +186,16 @@ class RAGChain:
                             sources.append({
                                 "id": doc_id,
                                 "filename": doc_metadata.filename,
-                                "metadata": doc_metadata.metadata
+                                "metadata": doc_metadata.metadata,
+                                "relevance_score": doc.metadata.get("score", None)
                             })
             
             return {
-                "answer": result["result"],
+                "answer": answer,
                 "sources": sources
             }
         except Exception as e:
+            logger.error(f"Error in answer_question: {str(e)}")
             return {
                 "error": str(e),
                 "answer": "I apologize, but I encountered an error while processing your question.",

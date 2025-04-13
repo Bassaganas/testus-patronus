@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional, Tuple
-from langchain_core.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
@@ -7,7 +7,7 @@ from langchain_community.document_loaders import (
     UnstructuredHTMLLoader
 )
 from langchain_core.documents import Document as LangchainDocument
-from .models import Document
+from .db.models import Document
 from .services.database import db
 from .config import settings
 from .vector_store import VectorStoreManager
@@ -18,6 +18,7 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
+import time
 
 # Get logger
 logger = logging.getLogger("testus-patronus")
@@ -41,7 +42,7 @@ class DocumentProcessor:
     def _validate_file_type(self, file_name: str) -> str:
         """Validate file type and return the extension."""
         file_extension = file_name.split(".")[-1].lower()
-        if file_extension not in settings.SUPPORTED_DOCUMENT_TYPES:
+        if file_extension not in settings.supported_document_types:
             raise ValueError(f"Unsupported document type: {file_extension}")
         return file_extension
     
@@ -54,12 +55,41 @@ class DocumentProcessor:
     
     def _process_file(self, file_path: str) -> List[LangchainDocument]:
         """Process a file and return a list of document chunks."""
-        file_extension = self._validate_file_type(file_path)
-        loader_class = self._get_loader(file_extension)
-        
-        loader = loader_class(file_path)
-        documents = loader.load()
-        return self.text_splitter.split_documents(documents)
+        try:
+            # Get file extension from path
+            file_extension = os.path.splitext(file_path)[1].lower().lstrip('.')
+            logger.info(f"Processing file with extension: {file_extension}")
+            
+            # Validate file type
+            if file_extension not in settings.supported_document_types:
+                logger.error(f"Unsupported document type: {file_extension}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported document type: {file_extension}"
+                )
+            
+            # Get the appropriate loader for the file type
+            loader_class = self._get_loader(file_extension)
+            logger.info(f"Using loader class: {loader_class.__name__}")
+            
+            # Load and process the document
+            loader = loader_class(file_path)
+            logger.info(f"Loading document from: {file_path}")
+            documents = loader.load()
+            logger.info(f"Document loaded successfully, splitting into chunks")
+            
+            # Split documents into chunks
+            split_docs = self.text_splitter.split_documents(documents)
+            logger.info(f"Document split into {len(split_docs)} chunks")
+            
+            return split_docs
+            
+        except Exception as e:
+            logger.error(f"Error processing file {file_path}: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing file: {str(e)}"
+            )
     
     def process_directory(self, directory_path: str) -> List[LangchainDocument]:
         """Process all supported documents in a directory."""
@@ -94,8 +124,11 @@ class DocumentProcessor:
                 detail=f"File size exceeds maximum limit of {settings.MAX_DOCUMENT_SIZE_MB}MB"
             )
         
+        # Validate file type first
+        file_extension = self._validate_file_type(file.filename)
+        
         # Create a temporary file
-        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as temp_file:
             try:
                 # Write content to temporary file
                 temp_file.write(content)
@@ -108,15 +141,34 @@ class DocumentProcessor:
                 doc_id = str(uuid4())
                 metadata = {
                     "file_name": file.filename,
-                    "file_type": self._validate_file_type(file.filename),
+                    "file_type": file_extension,
                     "file_size": len(content),
                     "chunk_count": len(split_docs),
                     "conversation_id": conversation_id,
                     "project_id": project_id
                 }
                 
-                # Add vectors to vector store
-                vector_store.add_documents(split_docs, doc_id)
+                # Add vectors to vector store with retry logic
+                max_retries = 3
+                retry_delay = 2  # seconds
+                last_error = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        vector_store.add_documents(split_docs, doc_id)
+                        break  # Success, exit the loop
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"Attempt {attempt+1}/{max_retries} to add documents to vector store failed: {str(e)}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                
+                if last_error:
+                    # If all retries failed, create the document without vector store
+                    logger.warning(f"All attempts to add documents to vector store failed. Creating document without vectors.")
+                    logger.warning(f"Last error: {str(last_error)}")
                 
                 # Create document record
                 document = Document(
@@ -133,7 +185,23 @@ class DocumentProcessor:
                     updated_at=datetime.utcnow()
                 )
                 
-                return document
+                # Convert to Pydantic model for API response
+                from app.models.document import Document as PydanticDocument
+                pydantic_doc = PydanticDocument(
+                    id=doc_id,
+                    title=file.filename,
+                    file_name=file.filename,
+                    file_type=metadata["file_type"],
+                    file_size=len(content),
+                    content="\n".join([doc.page_content for doc in split_docs]),
+                    metadata=metadata,
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                
+                return pydantic_doc
                 
             finally:
                 # Clean up the temporary file

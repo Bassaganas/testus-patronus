@@ -7,9 +7,9 @@ from app.config import settings
 def client():
     """Create an Azure OpenAI client for testing"""
     return AzureOpenAI(
-        api_version=settings.AZURE_OPENAI_API_VERSION,
+        api_version=settings.AZURE_OPENAI_CHAT_API_VERSION,
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-        api_key=settings.AZURE_OPENAI_API_KEY,
+        api_key=settings.AZURE_OPENAI_CHAT_API_KEY,
     )
 
 def test_azure_openai_connection(client):
@@ -29,7 +29,7 @@ def test_azure_openai_connection(client):
             max_tokens=100,
             temperature=0.7,
             top_p=1.0,
-            model=settings.AZURE_OPENAI_DEPLOYMENT_NAME
+            model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
         )
         
         assert response.choices[0].message.content is not None
@@ -38,10 +38,16 @@ def test_azure_openai_connection(client):
     except Exception as e:
         pytest.fail(f"Azure OpenAI connection failed: {str(e)}")
 
-def test_azure_openai_embeddings(client):
+def test_azure_openai_embeddings():
     """Test Azure OpenAI embeddings"""
+    embeddings_client = AzureOpenAI(
+        api_version=settings.AZURE_OPENAI_API_VERSION,
+        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+        api_key=settings.AZURE_OPENAI_EMBEDDINGS_API_KEY,
+    )
+    
     try:
-        response = client.embeddings.create(
+        response = embeddings_client.embeddings.create(
             model=settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
             input="Hello, world!"
         )
