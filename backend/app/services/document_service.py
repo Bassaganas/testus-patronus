@@ -48,6 +48,14 @@ class DocumentService:
                 project_id=project_id
             )
             
+            # Add project_id and conversation_id to metadata
+            if not processed_doc.metadata:
+                processed_doc.metadata = {}
+            if project_id:
+                processed_doc.metadata["project_id"] = project_id
+            if conversation_id:
+                processed_doc.metadata["conversation_id"] = conversation_id
+            
             # Convert Pydantic model to SQLAlchemy model for database storage
             from app.db.models import Document as SQLAlchemyDocument
             db_document = SQLAlchemyDocument(
@@ -85,7 +93,16 @@ class DocumentService:
         db_document.file_type = document.file_type
         db_document.file_size = document.file_size
         db_document.content = document.content
-        db_document.doc_metadata = document.metadata
+        
+        # Ensure metadata contains project_id and conversation_id
+        if not document.doc_metadata:
+            document.doc_metadata = {}
+        if document.project_id:
+            document.doc_metadata["project_id"] = document.project_id
+        if document.conversation_id:
+            document.doc_metadata["conversation_id"] = document.conversation_id
+            
+        db_document.doc_metadata = document.doc_metadata
         db_document.project_id = document.project_id
         db_document.conversation_id = document.conversation_id
         db_document.updated_at = datetime.utcnow()

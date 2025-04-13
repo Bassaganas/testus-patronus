@@ -64,13 +64,16 @@ class VectorStoreManager:
             logger.error(f"Health check failed: {str(e)}")
             return False
     
-    def add_documents(self, documents: List[Document], document_id: Optional[str] = None) -> None:
+    def add_documents(self, documents: List[Document], document_id: Optional[str] = None, 
+                    project_id: Optional[str] = None, conversation_id: Optional[str] = None) -> None:
         """
         Add documents to the vector store.
         
         Args:
             documents (List[Document]): List of documents to add
             document_id (Optional[str]): ID of the document these chunks belong to
+            project_id (Optional[str]): Project ID to associate with the document
+            conversation_id (Optional[str]): Conversation ID to associate with the document
         """
         try:
             # Log information about the documents being added
@@ -78,12 +81,28 @@ class VectorStoreManager:
             if document_id:
                 logger.info(f"Document ID: {document_id}")
             
-            # Add metadata if document_id is provided
-            if document_id:
-                for doc in documents:
-                    if not doc.metadata:
-                        doc.metadata = {}
+            # Add metadata to documents
+            for doc in documents:
+                if not doc.metadata:
+                    doc.metadata = {}
+                if document_id:
                     doc.metadata["document_id"] = document_id
+                
+                # Check if project_id and conversation_id are passed directly
+                if project_id:
+                    doc.metadata["project_id"] = project_id
+                    logger.info(f"Adding project_id to document metadata: {project_id}")
+                if conversation_id:
+                    doc.metadata["conversation_id"] = conversation_id
+                    logger.info(f"Adding conversation_id to document metadata: {conversation_id}")
+                
+                # Check if metadata contains project_id or conversation_id
+                if not project_id and "metadata" in doc.metadata and doc.metadata.get("metadata", {}).get("project_id"):
+                    doc.metadata["project_id"] = doc.metadata["metadata"]["project_id"]
+                    logger.info(f"Adding project_id from document metadata: {doc.metadata['project_id']}")
+                if not conversation_id and "metadata" in doc.metadata and doc.metadata.get("metadata", {}).get("conversation_id"):
+                    doc.metadata["conversation_id"] = doc.metadata["metadata"]["conversation_id"]
+                    logger.info(f"Adding conversation_id from document metadata: {doc.metadata['conversation_id']}")
             
             # Add to vector store with better error handling and retries
             max_retries = 3
@@ -293,4 +312,60 @@ class VectorStoreManager:
             logger.info("Collection deleted successfully")
         except Exception as e:
             logger.error(f"Error deleting collection: {str(e)}")
-            raise 
+            raise
+    
+    def update_document(self, document) -> None:
+        """
+        Update document metadata in vector store.
+        
+        Args:
+            document: The document with updated metadata
+        """
+        try:
+            logger.info(f"Updating document metadata in vector store for document_id: {document.id}")
+            
+            # First, retrieve all chunks for this document
+            document_chunks = self.get_document(document.id)
+            
+            if not document_chunks:
+                logger.warning(f"No chunks found for document {document.id} in vector store. Skipping update.")
+                return
+                
+            # Delete existing chunks
+            self.delete_document(document.id)
+            
+            # Extract project_id and conversation_id from document
+            project_id = document.project_id
+            conversation_id = document.conversation_id
+            
+            # Create new Langchain documents with updated metadata
+            updated_chunks = []
+            for chunk in document_chunks:
+                # Create a new metadata dictionary with updated values
+                metadata = chunk.metadata.copy() if chunk.metadata else {}
+                if project_id:
+                    metadata["project_id"] = project_id
+                if conversation_id:
+                    metadata["conversation_id"] = conversation_id
+                
+                # Create a new document with the updated metadata
+                updated_chunk = Document(
+                    page_content=chunk.page_content,
+                    metadata=metadata
+                )
+                updated_chunks.append(updated_chunk)
+            
+            # Re-add the chunks with updated metadata
+            self.add_documents(
+                updated_chunks, 
+                document_id=document.id,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            
+            logger.info(f"Successfully updated metadata for {len(updated_chunks)} chunks in document {document.id}")
+            
+        except Exception as e:
+            logger.error(f"Error updating document metadata in vector store: {str(e)}")
+            # Don't raise, as this should not block the main update operation
+            logger.warning("Document updated in database but vector store update failed") 

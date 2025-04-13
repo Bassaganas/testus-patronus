@@ -155,7 +155,12 @@ class DocumentProcessor:
                 
                 for attempt in range(max_retries):
                     try:
-                        vector_store.add_documents(split_docs, doc_id)
+                        vector_store.add_documents(
+                            split_docs, 
+                            doc_id, 
+                            project_id=project_id, 
+                            conversation_id=conversation_id
+                        )
                         break  # Success, exit the loop
                     except Exception as e:
                         last_error = e
