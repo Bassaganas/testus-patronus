@@ -1,12 +1,12 @@
 from typing import List, Dict, Any, Optional, Tuple
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import (
+from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
     UnstructuredMarkdownLoader,
     UnstructuredHTMLLoader
 )
-from langchain.schema import Document as LangchainDocument
+from langchain_core.documents import Document as LangchainDocument
 from .models import Document
 from .services.database import db
 from .config import settings

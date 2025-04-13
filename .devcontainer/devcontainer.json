@@ -61,7 +61,34 @@
                     }
                 },
                 "autoDocstring.docstringFormat": "google",
-                "autoDocstring.startOnNewLine": true
+                "autoDocstring.startOnNewLine": true,
+                "debug.internalConsoleOptions": "neverOpen",
+                "debug.toolBarLocation": "docked",
+                "debug.showInStatusBar": "always"
+            }
+        },
+        "codespaces": {
+            "repositories": {
+                "${localWorkspaceFolderBasename}": {
+                    "permissions": {
+                        "ports": [
+                            {
+                                "port": 8000,
+                                "label": "Backend API",
+                                "protocol": "https",
+                                "visibility": "public",
+                                "onAutoForward": "notify"
+                            },
+                            {
+                                "port": 3000,
+                                "label": "Frontend",
+                                "protocol": "https",
+                                "visibility": "public",
+                                "onAutoForward": "notify"
+                            }
+                        ]
+                    }
+                }
             }
         }
     },
@@ -69,7 +96,19 @@
         8000,
         3000
     ],
-    "postCreateCommand": "pip install -r backend/requirements.txt",
+    "portsAttributes": {
+        "8000": {
+            "label": "Backend API",
+            "onAutoForward": "notify",
+            "protocol": "https"
+        },
+        "3000": {
+            "label": "Frontend",
+            "onAutoForward": "notify",
+            "protocol": "https"
+        }
+    },
+    "postCreateCommand": "pip install -r backend/requirements.txt && mkdir -p backend/data/db backend/data/uploads && cp -n backend/.env.development backend/.env",
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "20"

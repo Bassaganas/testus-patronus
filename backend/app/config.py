@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     
     #DB Settings
     DB_PATH: str = "data/db"
+    DATABASE_URL: str
 
     class Config:
         env_file = ".env"

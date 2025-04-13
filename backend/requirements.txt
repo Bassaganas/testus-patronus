@@ -1,6 +1,7 @@
 fastapi==0.109.2
 uvicorn==0.27.1
-langchain==0.1.9
+langchain-core==0.1.22
+langchain-community==0.0.21
 langchain-openai==0.0.8
 chromadb==0.4.24
 python-dotenv==1.0.1
@@ -18,7 +19,6 @@ isort==5.13.2
 flake8==7.0.0
 mypy==1.8.0
 pydantic-settings==2.0.2
-langchain-community==0.0.21
 unstructured==0.12.3
 pdf2image==1.17.0
 pytesseract==0.3.10

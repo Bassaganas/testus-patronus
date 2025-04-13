@@ -1,17 +1,17 @@
 from typing import List, Dict, Any, Optional
-from langchain.chains import RetrievalQA
-from langchain.chat_models import AzureChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.schema import Document
+from langchain_core.chains import RetrievalQA
+from langchain_openai import AzureChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
 from .config import settings
 from .vector_store import VectorStoreManager
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain_core.chains import ConversationalRetrievalChain
+from langchain_core.memory import ConversationBufferMemory
 from .services.database import db
 from .models import Message
 import logging
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
 
 # Get logger
 logger = logging.getLogger("testus-patronus")
@@ -154,7 +154,7 @@ class RAGChain:
             )
             
             # Create a custom retriever that returns our pre-filtered docs
-            from langchain.schema.retriever import BaseRetriever
+            from langchain_core.schema.retriever import BaseRetriever
             
             class ContextFilteredRetriever(BaseRetriever):
                 def __init__(self, docs):
