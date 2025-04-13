@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Upgrade pip and install basic tools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Install Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -26,7 +29,14 @@ RUN pip install --no-cache-dir \
     black \
     flake8 \
     mypy \
-    isort
+    isort \
+    pylint
+
+# Create non-root user
+RUN useradd -m -s /bin/bash vscode \
+    && chown -R vscode:vscode /app
+
+USER vscode
 
 # Production stage
 FROM base as production

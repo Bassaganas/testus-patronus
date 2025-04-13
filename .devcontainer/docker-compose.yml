@@ -9,13 +9,16 @@ services:
     volumes:
       - ..:/workspaces:cached
       - ~/.gitconfig:/home/vscode/.gitconfig
+      - /workspaces/testus-patronus/backend:/app
     command: sleep infinity
     ports:
       - "8000:8000"
       - "3000:3000"
     user: vscode
     environment:
-      - PYTHONPATH=/workspaces/testus-patronus/backend
+      - PYTHONPATH=/app
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
 
   chroma:
     image: chromadb/chroma:latest

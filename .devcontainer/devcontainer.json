@@ -28,13 +28,16 @@
         8000,
         3000
     ],
-    "postCreateCommand": "pip install -r backend/requirements.txt && cd frontend && npm install",
+    "postCreateCommand": "pip install --upgrade pip setuptools wheel && pip install -r backend/requirements.txt && cd frontend && npm install",
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "20"
         },
         "ghcr.io/devcontainers/features/python:1": {
-            "version": "3.10"
+            "version": "3.10",
+            "installTools": true,
+            "installPipx": true,
+            "installDevTools": true
         }
     },
     "remoteUser": "vscode"
