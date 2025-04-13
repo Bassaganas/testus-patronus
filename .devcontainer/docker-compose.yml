@@ -4,14 +4,16 @@ services:
   app:
     build:
       context: ..
-      dockerfile: .devcontainer/Dockerfile
+      dockerfile: backend/Dockerfile
+      target: development
     volumes:
       - ..:/workspace:cached
     command: sleep infinity
-    network_mode: service:db
+    network_mode: service:chroma
 
-  db:
+  chroma:
     image: chromadb/chroma:latest
+    restart: unless-stopped
     volumes:
       - chroma_data:/chroma/chroma
     environment:
