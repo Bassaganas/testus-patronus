@@ -2,49 +2,25 @@ version: '3.8'
 
 services:
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./backend
     ports:
       - "8000:8000"
-    environment:
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
-      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
-      - VECTOR_STORE_PATH=/app/data/vector_store
-      - ALLOWED_ORIGINS=["http://localhost:3000"]
     volumes:
-      - vector_store:/app/data/vector_store
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - app-network
+      - ./data:/app/data
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: ./frontend
     ports:
-      - "3000:3000"
-    environment:
-      - REACT_APP_API_URL=http://backend:8000
-      - WDS_SOCKET_PORT=0
-      - CHOKIDAR_USEPOLLING=true
-    volumes:
-      - ./frontend:/app:delegated
-      - frontend_node_modules:/app/node_modules
-    stdin_open: true
-    tty: true
+      - "3001:80"
     depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - app-network
+      - backend
+    restart: unless-stopped
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
 
 volumes:
   vector_store:

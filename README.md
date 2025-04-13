@@ -1,6 +1,83 @@
-# Testus Patronus 🪄
+# Testus Patronus - RAG Document Query Application
 
-A RAG-based Educational Assistant that helps students learn by leveraging document-based question answering.
+A document query application that allows you to upload documents, create projects and conversations, and ask questions about the documents.
+
+## Local Development Setup
+
+### Prerequisites
+- Python 3.9+ 
+- Node.js 16+
+- npm or yarn
+
+### Backend Setup
+1. Navigate to the backend directory:
+   ```bash
+   cd backend
+   ```
+
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Create data directories:
+   ```bash
+   mkdir -p data/vector_store data/db
+   ```
+
+5. Start the backend server:
+   ```bash
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+### Frontend Setup
+1. Navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Start the frontend development server:
+   ```bash
+   npm start
+   ```
+
+   If port 3000 is already in use, it will prompt you to use another port (like 3001).
+
+## Using the Application
+
+1. Access the application in your browser at http://localhost:3000 (or the alternative port)
+
+2. Create a new project by clicking the + button in the sidebar
+
+3. Create a new conversation within a project, or as a standalone conversation
+
+4. Upload documents to projects or conversations
+
+5. Ask questions about the uploaded documents
+
+## Features
+
+- **Projects**: Create projects to organize your conversations and documents
+- **Conversations**: Create conversations within projects or as standalone
+- **Document Management**: Upload and view documents per project or conversation
+- **Document Query**: Ask questions about the uploaded documents using RAG technology
+
+## Troubleshooting
+
+- If you get an error about a read-only file system, make sure the VECTOR_STORE_PATH in your .env file is set to "./data/vector_store" (relative path)
+- If the frontend can't connect to the backend, check that REACT_APP_API_URL in frontend/.env is set to "http://localhost:8000"
+- Make sure data directories exist and have proper permissions
 
 ## 🌟 Features
 

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     DEBUG: bool
 
     # CORS Configuration
-    ALLOWED_ORIGINS: List[str]
+    ALLOWED_ORIGINS: str
 
     # Vector DB Settings
     CHROMA_PERSIST_DIRECTORY: str = "data/chroma"
@@ -37,9 +37,16 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     
+    #DB Settings
+    DB_PATH: str = "data/db"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+
+    @property
+    def origins(self) -> List[str]:
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
 
 settings = Settings() 
