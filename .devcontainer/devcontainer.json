@@ -75,7 +75,7 @@
                             {
                                 "port": 8000,
                                 "label": "Backend API",
-                                "protocol": "https",
+                                "protocol": "http",
                                 "visibility": "public",
                                 "onAutoForward": "notify"
                             },
@@ -100,7 +100,7 @@
         "8000": {
             "label": "Backend API",
             "onAutoForward": "notify",
-            "protocol": "https"
+            "protocol": "http"
         },
         "3000": {
             "label": "Frontend",
