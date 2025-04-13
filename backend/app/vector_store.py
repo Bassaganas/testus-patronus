@@ -156,7 +156,7 @@ class VectorStoreManager:
         k: int = 4, 
         conversation_id: Optional[str] = None,
         project_id: Optional[str] = None,
-        score_threshold: float = 0.7
+        score_threshold: float = 0.5  # Lowered from 0.7 to be less strict
     ) -> List[Document]:
         """
         Perform a similarity search on the vector store.
@@ -166,51 +166,126 @@ class VectorStoreManager:
             k: Number of results to return
             conversation_id: Limit results to a specific conversation
             project_id: Limit results to a specific project
-            score_threshold: Minimum similarity score threshold
+            score_threshold: Minimum similarity score threshold (applied post-query)
             
         Returns:
             List of Document objects
         """
         try:
-            # Build filter based on conversation or project
-            filter_dict: Dict[str, Any] = {}
-            if conversation_id:
-                filter_dict["conversation_id"] = conversation_id
+            # First try with both filters if both are provided
+            if conversation_id and project_id:
+                filter_dict = {
+                    "$and": [
+                        {"conversation_id": conversation_id},
+                        {"project_id": project_id}
+                    ]
+                }
+                logger.info(f"Filtering search by conversation_id: {conversation_id} AND project_id: {project_id}")
+                
+                # Try the combined filter first
+                results = self._execute_search(query, k, filter_dict, score_threshold)
+                if results:
+                    return results
+                
+                # If no results, try with just conversation_id
+                logger.info(f"No results with combined filters, trying just conversation_id: {conversation_id}")
+                filter_dict = {"conversation_id": conversation_id}
+                results = self._execute_search(query, k, filter_dict, score_threshold)
+                if results:
+                    return results
+                
+                # If still no results, try with just project_id
+                logger.info(f"No results with conversation_id, trying just project_id: {project_id}")
+                filter_dict = {"project_id": project_id}
+                results = self._execute_search(query, k, filter_dict, score_threshold)
+                if results:
+                    return results
+                
+                # If still no results, try without filters but with a lower threshold
+                logger.info("No results with any filters, trying without filters")
+                return self._execute_search(query, k, None, score_threshold * 0.7)  # Lower threshold by 30%
+                
+            elif conversation_id:
+                # Only conversation_id provided
+                filter_dict = {"conversation_id": conversation_id}
                 logger.info(f"Filtering search by conversation_id: {conversation_id}")
-            if project_id:
-                filter_dict["project_id"] = project_id
+                
+                results = self._execute_search(query, k, filter_dict, score_threshold)
+                if results:
+                    return results
+                    
+                # Try without filters if no results
+                logger.info("No results with conversation_id filter, trying without filters")
+                return self._execute_search(query, k, None, score_threshold * 0.7)
+                
+            elif project_id:
+                # Only project_id provided
+                filter_dict = {"project_id": project_id}
                 logger.info(f"Filtering search by project_id: {project_id}")
                 
+                results = self._execute_search(query, k, filter_dict, score_threshold)
+                if results:
+                    return results
+                    
+                # Try without filters if no results
+                logger.info("No results with project_id filter, trying without filters")
+                return self._execute_search(query, k, None, score_threshold * 0.7)
+                
+            else:
+                # No filters provided
+                logger.info("No filters provided, searching all documents")
+                return self._execute_search(query, k, None, score_threshold)
+            
+        except Exception as e:
+            logger.error(f"Error in similarity search: {str(e)}")
+            # Return empty results instead of raising to avoid breaking the entire query
+            logger.warning("Returning empty results due to search error")
+            return []
+            
+    def _execute_search(self, query: str, k: int, filter_dict: Optional[Dict] = None, score_threshold: float = 0.5) -> List[Document]:
+        """
+        Helper method to execute a search with the given parameters and filter results by score.
+        
+        Args:
+            query: The search query
+            k: Number of results to return
+            filter_dict: Filter dictionary for the search
+            score_threshold: Minimum similarity score threshold
+            
+        Returns:
+            List of filtered Document objects
+        """
+        try:
             # Log the search query
             logger.info(f"Performing similarity search with query: '{query[:50]}...' (k={k})")
             
-            # Perform search with filter and score threshold
-            search_kwargs = {
-                "k": k,
-                "score_threshold": score_threshold
-            }
+            # Prepare search kwargs
+            search_kwargs = {"k": k}
             if filter_dict:
                 search_kwargs["filter"] = filter_dict
                 logger.info(f"Using filter: {filter_dict}")
             
-            results = self.vector_store.similarity_search_with_score(
-                query,
-                **search_kwargs
-            )
+            # Execute search
+            results = self.vector_store.similarity_search_with_score(query, **search_kwargs)
             
-            # Convert results to Document objects with scores in metadata
-            documents = []
+            # Apply score threshold manually after the query
+            filtered_results = []
             for doc, score in results:
-                if not doc.metadata:
-                    doc.metadata = {}
-                doc.metadata["score"] = score
-                documents.append(doc)
+                # Note: similarity_search_with_score returns distance, not similarity
+                # Lower distance means higher similarity, so we need to invert the comparison
+                similarity = 1.0 - score  # Convert distance to similarity score
+                if similarity >= score_threshold:
+                    if not doc.metadata:
+                        doc.metadata = {}
+                    doc.metadata["score"] = similarity
+                    filtered_results.append(doc)
             
-            logger.info(f"Search returned {len(documents)} results")
-            return documents
+            logger.info(f"Search returned {len(filtered_results)} results after filtering by score threshold {score_threshold}")
+            return filtered_results
+            
         except Exception as e:
-            logger.error(f"Error in similarity search: {str(e)}")
-            raise
+            logger.warning(f"Error in execute_search: {str(e)}")
+            return []
     
     def get_document(self, document_id: str) -> List[Document]:
         """
@@ -263,7 +338,8 @@ class VectorStoreManager:
             logger.info(f"Successfully deleted chunks for document {document_id}")
         except Exception as e:
             logger.error(f"Error deleting document chunks: {str(e)}")
-            raise
+            # Don't raise, as this shouldn't block operations
+            logger.warning(f"Failed to delete document chunks for {document_id}")
     
     def delete_conversation_documents(self, conversation_id: str) -> None:
         """
@@ -281,7 +357,8 @@ class VectorStoreManager:
             logger.info(f"Successfully deleted chunks for conversation {conversation_id}")
         except Exception as e:
             logger.error(f"Error deleting conversation documents: {str(e)}")
-            raise
+            # Don't raise, as this shouldn't block operations
+            logger.warning(f"Failed to delete document chunks for conversation {conversation_id}")
     
     def delete_project_documents(self, project_id: str) -> None:
         """
@@ -300,6 +377,7 @@ class VectorStoreManager:
         except Exception as e:
             logger.error(f"Error deleting project documents from vector store: {str(e)}")
             # Don't raise the error since this is not critical for project deletion
+            logger.warning(f"Failed to delete document chunks for project {project_id}")
     
     def delete_collection(self) -> None:
         """

@@ -54,7 +54,7 @@ class RAGChain:
             
             # Initialize the retriever with better search parameters
             logger.info("Initializing retriever")
-            self.retriever = self.vector_store.vectorstore.as_retriever(
+            self.retriever = self.vector_store.vector_store.as_retriever(
                 search_type="similarity",
                 search_kwargs={
                     "k": 4,
@@ -103,15 +103,30 @@ class RAGChain:
             # Get conversation history if a conversation_id is provided
             chat_history = []
             if conversation_id:
-                conversation = db.get_conversation(conversation_id)
-                if conversation and conversation.messages:
-                    logger.info(f"Using conversation history with {len(conversation.messages)} messages")
-                    chat_history = [
-                        (msg.role, msg.content) 
-                        for msg in conversation.messages[-5:]  # Use last 5 messages for context
-                    ]
-                else:
-                    logger.info("No conversation history found")
+                try:
+                    # Use the db service's get_conversation method if it exists, or fall back to a direct database access
+                    from app.db.models import Conversation
+                    from sqlalchemy.orm import Session
+                    from app.db.session import get_db
+                    
+                    # Get a database session
+                    session = next(get_db())
+                    conversation = session.query(Conversation).filter(Conversation.id == conversation_id).first()
+                    
+                    if conversation and hasattr(conversation, 'messages') and conversation.messages:
+                        logger.info(f"Using conversation history with {len(conversation.messages)} messages")
+                        # Convert message list to format expected by chat history
+                        # Format as tuples of (role, content)
+                        for msg in conversation.messages[-5:]:  # Use last 5 messages for context
+                            if isinstance(msg, dict):
+                                role = msg.get("role", "user")
+                                content = msg.get("content", "")
+                                chat_history.append((role, content))
+                    else:
+                        logger.info("No conversation history found or no messages in conversation")
+                except Exception as e:
+                    logger.error(f"Error retrieving conversation history: {str(e)}")
+                    logger.info("Continuing without conversation history")
             
             try:
                 # Use the QA chain to get a response with chat history
@@ -181,14 +196,23 @@ class RAGChain:
                     doc_id = doc.metadata["document_id"]
                     if doc_id not in doc_ids:
                         doc_ids.add(doc_id)
-                        doc_metadata = db.get_document(doc_id)
-                        if doc_metadata:
-                            sources.append({
-                                "id": doc_id,
-                                "filename": doc_metadata.filename,
-                                "metadata": doc_metadata.metadata,
-                                "relevance_score": doc.metadata.get("score", None)
-                            })
+                        try:
+                            # Use SQLAlchemy query instead of non-existent get_document method
+                            from app.db.models import Document
+                            from app.db.session import get_db
+                            
+                            # Get a database session
+                            session = next(get_db())
+                            doc_metadata = session.query(Document).filter(Document.id == doc_id).first()
+                            if doc_metadata:
+                                sources.append({
+                                    "id": doc_id,
+                                    "filename": doc_metadata.file_name,
+                                    "metadata": doc_metadata.doc_metadata,
+                                    "relevance_score": doc.metadata.get("score", None)
+                                })
+                        except Exception as e:
+                            logger.error(f"Error retrieving document metadata for {doc_id}: {str(e)}")
             
             return {
                 "answer": answer,
@@ -200,4 +224,86 @@ class RAGChain:
                 "error": str(e),
                 "answer": "I apologize, but I encountered an error while processing your question.",
                 "sources": []
-            } 
+            }
+            
+    async def process_query(self, query: str, documents: List) -> str:
+        """
+        Process a query in the context of specific documents.
+        This method is called by the conversation endpoints.
+        
+        Args:
+            query (str): The user query
+            documents (List): List of document objects from the database
+            
+        Returns:
+            str: The response to the query
+        """
+        try:
+            logger.info(f"Processing query: '{query[:50]}...' with {len(documents)} documents")
+            
+            if not documents:
+                logger.warning("No documents provided for query")
+                return "I don't have any documents to reference. Please upload some documents to help me provide a more informed response."
+            
+            # Extract document IDs
+            document_ids = [doc.id for doc in documents if hasattr(doc, 'id')]
+            logger.info(f"Extracted {len(document_ids)} document IDs")
+            
+            # Get the conversation ID and project ID from the first document
+            conversation_id = documents[0].conversation_id if documents and hasattr(documents[0], 'conversation_id') else None
+            project_id = documents[0].project_id if documents and hasattr(documents[0], 'project_id') else None
+            
+            if conversation_id:
+                logger.info(f"Using conversation context: {conversation_id}")
+            if project_id:
+                logger.info(f"Using project context: {project_id}")
+            
+            # Get relevant documents using similarity search
+            try:
+                relevant_docs = self.vector_store.similarity_search(
+                    query=query,
+                    k=4,
+                    conversation_id=conversation_id,
+                    project_id=project_id
+                )
+            except Exception as e:
+                logger.error(f"Error in similarity search: {str(e)}")
+                # Fallback response
+                return "I encountered an issue searching through the documents. Please try again or rephrase your question."
+            
+            if not relevant_docs:
+                logger.warning("No relevant documents found for query")
+                return "I couldn't find any relevant information in the documents to answer your question. Could you please rephrase or ask something else about the documents?"
+            
+            # Format documents for the prompt
+            def format_docs(docs: List[Document]) -> str:
+                formatted_docs = []
+                for doc in docs:
+                    content = doc.page_content
+                    formatted_docs.append(content)
+                return "\n\n".join(formatted_docs)
+            
+            # Create a temporary chain for this query
+            context = format_docs(relevant_docs)
+            
+            # Create a response using a simplified approach
+            from langchain_core.messages import HumanMessage, SystemMessage
+            
+            messages = [
+                SystemMessage(content="You are a helpful AI assistant that answers questions based on the provided context. If you don't know the answer, just say that you don't know."),
+                HumanMessage(content=f"Context: {context}\n\nQuestion: {query}")
+            ]
+            
+            try:
+                response = self.llm.invoke(messages)
+                answer = response.content
+            except Exception as e:
+                logger.error(f"Error generating response: {str(e)}")
+                return "I encountered an issue generating a response. Please try again."
+            
+            logger.info(f"Generated response: '{answer[:50]}...'")
+            return answer
+            
+        except Exception as e:
+            logger.error(f"Error processing query: {str(e)}")
+            return f"I apologize, but I encountered an error while processing your query: {str(e)}" 
