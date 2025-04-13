@@ -7,11 +7,15 @@ services:
       dockerfile: backend/Dockerfile
       target: development
     volumes:
-      - ..:/workspace:cached
+      - ..:/workspaces:cached
+      - ~/.gitconfig:/home/vscode/.gitconfig
     command: sleep infinity
     ports:
       - "8000:8000"
       - "3000:3000"
+    user: vscode
+    environment:
+      - PYTHONPATH=/workspaces/testus-patronus/backend
 
   chroma:
     image: chromadb/chroma:latest
