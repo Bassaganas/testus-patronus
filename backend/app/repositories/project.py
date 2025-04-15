@@ -23,7 +23,7 @@ class ProjectRepository:
     def update(self, id: str, project: Project) -> Optional[Project]:
         existing = self.get_by_id(id)
         if existing:
-            for key, value in project.dict(exclude={'id'}).items():
+            for key, value in project.model_dump(exclude={'id'}).items():
                 setattr(existing, key, value)
             existing.updated_at = datetime.utcnow()
             self.db.commit()

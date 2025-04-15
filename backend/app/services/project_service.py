@@ -7,6 +7,7 @@ from app.repositories.project import ProjectRepository
 from app.vector_store import VectorStoreManager
 from datetime import datetime
 import logging
+from app.models.project import Project, ProjectCreate
 
 logger = logging.getLogger("testus-patronus")
 
@@ -27,13 +28,14 @@ class ProjectService:
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
         return project
         
-    async def create_project(self, project: Project) -> Project:
+    async def create_project(self, project_create: ProjectCreate) -> Project:
         """Create a new project."""
         try:
-            # Set default timestamps
-            if not project.created_at:
-                project.created_at = datetime.utcnow()
-            project.updated_at = datetime.utcnow()
+            # Create a new Project instance with default values
+            project = Project(
+                title=project_create.title,
+                description=project_create.description
+            )
             
             # Create project in database
             created_project = self.repository.create(project)
@@ -48,7 +50,7 @@ class ProjectService:
         db_project = await self.get_project(project_id)
         
         # Update fields
-        for key, value in project.dict(exclude={'id'}).items():
+        for key, value in project.model_dump(exclude={'id'}).items():
             setattr(db_project, key, value)
         
         db_project.updated_at = datetime.utcnow()

@@ -6,6 +6,7 @@ from app.repositories.project import ProjectRepository
 from app.services.project_service import ProjectService
 from app.api.v1.exceptions import NotFoundError, ValidationError
 from app.vector_store import VectorStoreManager
+from fastapi import HTTPException
 
 @pytest.fixture
 def mock_db():
@@ -20,8 +21,8 @@ def project_repository(mock_db):
     return ProjectRepository(mock_db)
 
 @pytest.fixture
-def project_service(project_repository, mock_vector_store):
-    return ProjectService(vector_store=mock_vector_store, project_repository=project_repository)
+def project_service(mock_db, mock_vector_store):
+    return ProjectService(vector_store=mock_vector_store, db=mock_db)
 
 @pytest.fixture
 def sample_project_data():
@@ -104,33 +105,38 @@ class TestProjectRepository:
         mock_db.commit.assert_called_once()
 
 class TestProjectService:
-    def test_create_project(self, project_service, project_repository, sample_project_data):
+    @pytest.mark.asyncio
+    async def test_create_project(self, project_service, mock_db, sample_project_data):
         # Arrange
         project_create = ProjectCreate(
             title=sample_project_data["title"],
             description=sample_project_data["description"]
         )
-        project_repository.create = Mock(return_value=Project(**sample_project_data))
+        # Mock the repository's create method
+        project_service.repository.create = Mock(return_value=Project(**sample_project_data))
         
         # Act
-        result = project_service.create(project_create)
+        result = await project_service.create_project(project_create)
         
         # Assert
         assert result.title == sample_project_data["title"]
         assert result.description == sample_project_data["description"]
-        project_repository.create.assert_called_once()
+        project_service.repository.create.assert_called_once()
 
-    def test_get_project_not_found(self, project_service, project_repository):
+    @pytest.mark.asyncio
+    async def test_get_project_not_found(self, project_service, mock_db):
         # Arrange
-        project_repository.get_by_id = Mock(return_value=None)
+        project_service.repository.get_by_id = Mock(return_value=None)
         
         # Act & Assert
-        with pytest.raises(NotFoundError):
-            project_service.get("non-existent-id")
+        with pytest.raises(HTTPException) as excinfo:
+            await project_service.get_project("non-existent-id")
+        assert excinfo.value.status_code == 404
 
-    def test_update_project(self, project_service, project_repository, sample_project):
+    @pytest.mark.asyncio
+    async def test_update_project(self, project_service, mock_db, sample_project):
         # Arrange
-        project_repository.get_by_id = Mock(return_value=sample_project)
+        project_service.repository.get_by_id = Mock(return_value=sample_project)
         updated_project = Project(
             id=sample_project.id,
             title="Updated Title",
@@ -139,28 +145,29 @@ class TestProjectService:
             updated_at=datetime.utcnow(),
             documents=[]
         )
-        project_repository.update = Mock(return_value=updated_project)
+        project_service.repository.update = Mock(return_value=updated_project)
         update_data = ProjectUpdate(
             title="Updated Title",
             description="Updated description"
         )
         
         # Act
-        result = project_service.update(sample_project.id, update_data)
+        result = await project_service.update_project(sample_project.id, update_data)
         
         # Assert
         assert result.title == "Updated Title"
         assert result.description == "Updated description"
-        project_repository.update.assert_called_once()
+        project_service.repository.update.assert_called_once()
 
-    def test_delete_project(self, project_service, project_repository, sample_project):
+    @pytest.mark.asyncio
+    async def test_delete_project(self, project_service, mock_db, sample_project):
         # Arrange
-        project_repository.get_by_id = Mock(return_value=sample_project)
-        project_repository.delete = Mock(return_value=True)
+        project_service.repository.get_by_id = Mock(return_value=sample_project)
+        project_service.repository.delete = Mock(return_value=True)
         
         # Act
-        result = project_service.delete(sample_project.id)
+        result = await project_service.delete_project(sample_project.id)
         
         # Assert
-        assert result is True
-        project_repository.delete.assert_called_once() 
+        assert result is None
+        project_service.repository.delete.assert_called_once() 
