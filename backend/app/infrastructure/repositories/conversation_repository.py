@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from datetime import datetime
 
 from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse
 from app.infrastructure.database.models.conversation import Conversation
@@ -122,23 +123,32 @@ class ConversationRepository:
         await self.db.delete(db_conversation)
         await self.db.commit()
 
-    async def add_message(self, conversation_id: UUID, message: dict) -> ConversationResponse:
-        db_conversation = await self.get_by_id(conversation_id)
-        if not db_conversation.messages:
-            db_conversation.messages = []
-        db_conversation.messages.append(message)
-        await self.db.commit()
-        await self.db.refresh(db_conversation)
-        
-        # Reload the conversation with relationships
+    async def add_message(
+        self, conversation_id: UUID, message: Dict[str, str]
+    ) -> ConversationResponse:
+        # Get the conversation database model with documents eagerly loaded
         result = await self.db.execute(
             select(Conversation)
             .where(Conversation.id == str(conversation_id))
             .options(selectinload(Conversation.documents))
         )
-        db_conversation = result.scalar_one()
+        db_conversation = result.scalar_one_or_none()
+        if not db_conversation:
+            raise NotFoundException(f"Conversation with id {conversation_id} not found")
         
-        # Create a dict representation of the conversation
+        # Initialize messages list if None
+        if db_conversation.messages is None:
+            db_conversation.messages = []
+        
+        # Add the new message
+        db_conversation.messages.append(message)
+        db_conversation.updated_at = datetime.utcnow()
+        
+        # Commit changes to the database
+        await self.db.commit()
+        await self.db.refresh(db_conversation)
+        
+        # Convert the database model to a schema response
         conv_dict = {
             "id": db_conversation.id,
             "title": db_conversation.title,
@@ -150,27 +160,32 @@ class ConversationRepository:
         }
         return ConversationResponse.model_validate(conv_dict)
 
-    async def add_document(self, conversation_id: UUID, document_id: UUID) -> ConversationResponse:
-        db_conversation = await self.get_by_id(conversation_id)
-        result = await self.db.execute(
-            select(Document).where(Document.id == str(document_id))
-        )
-        document = result.scalar_one_or_none()
-        if not document:
-            raise NotFoundException(f"Document with id {document_id} not found")
-        
-        if document not in db_conversation.documents:
-            db_conversation.documents.append(document)
-            await self.db.commit()
-            await self.db.refresh(db_conversation)
-        
-        # Reload the conversation with relationships
+    async def add_document(
+        self, conversation_id: UUID, document_id: UUID
+    ) -> ConversationResponse:
+        # Get the conversation database model instance
         result = await self.db.execute(
             select(Conversation)
             .where(Conversation.id == str(conversation_id))
             .options(selectinload(Conversation.documents))
         )
-        db_conversation = result.scalar_one()
+        db_conversation = result.scalar_one_or_none()
+        if not db_conversation:
+            raise NotFoundException(f"Conversation with id {conversation_id} not found")
+        
+        # Get the document database model instance
+        doc_result = await self.db.execute(
+            select(Document).where(Document.id == str(document_id))
+        )
+        db_document = doc_result.scalar_one_or_none()
+        if not db_document:
+            raise NotFoundException(f"Document with id {document_id} not found")
+        
+        # Only add the document if it's not already in the conversation
+        if db_document not in db_conversation.documents:
+            db_conversation.documents.append(db_document)
+            await self.db.commit()
+            await self.db.refresh(db_conversation)
         
         # Create a dict representation of the conversation
         conv_dict = {

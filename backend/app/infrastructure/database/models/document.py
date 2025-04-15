@@ -29,8 +29,10 @@ class Document(Base):
     content = Column(Text, nullable=True)
     doc_metadata = Column(JSON, nullable=True, default={})
     project_id = Column(String, ForeignKey("projects.id"), nullable=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
     # Relationships
     project = relationship("Project", back_populates="documents")

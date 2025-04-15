@@ -61,7 +61,8 @@ class DocumentRepository:
             file_size=document.file_size,
             content=document.content,
             doc_metadata=document.doc_metadata,
-            project_id=document.project_id
+            project_id=document.project_id,
+            conversation_id = document.conversation_id
         )
         self.db.add(db_document)
         await self.db.commit()

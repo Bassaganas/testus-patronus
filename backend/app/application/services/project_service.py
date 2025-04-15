@@ -28,6 +28,7 @@ class ProjectService:
         existing_project = await self.get_project_by_id(project_id)
         return await self.repository.update(project_id, project)
 
-    async def delete_project(self, project_id: UUID) -> None:
+    async def delete_project(self, project_id: UUID) -> ProjectResponse:
         project = await self.get_project_by_id(project_id)
-        await self.repository.delete(project_id) 
+        await self.repository.delete(project_id)
+        return project 

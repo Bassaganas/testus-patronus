@@ -4,13 +4,15 @@ from sqlalchemy.orm import Session
 
 from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse, QueryResponse
 from app.infrastructure.repositories.conversation_repository import ConversationRepository
+from app.infrastructure.repositories.document_repository import DocumentRepository
 from app.infrastructure.vector_store.vector_store import VectorStoreManager
 from app.infrastructure.rag.rag_chain import RAGChain
 from app.core.exceptions import NotFoundException, ValidationException
 
 class ConversationService:
-    def __init__(self, repository: ConversationRepository, vector_store: VectorStoreManager, rag_chain: RAGChain):
+    def __init__(self, repository: ConversationRepository, document_repository: DocumentRepository, vector_store: VectorStoreManager, rag_chain: RAGChain):
         self.repository = repository
+        self.document_repository = document_repository
         self.vector_store = vector_store
         self.rag_chain = rag_chain
 
@@ -50,7 +52,9 @@ class ConversationService:
         
     async def query_conversation(self, conversation_id: UUID, query: str) -> str:
         """
-        Query a conversation using RAG.
+        Query a conversation using RAG, fetching documents from both:
+        1. The conversation's explicitly added documents
+        2. All documents belonging to the conversation's project
         
         Args:
             conversation_id: The ID of the conversation
@@ -65,18 +69,75 @@ class ConversationService:
         """
         conversation = await self.get_conversation_by_id(conversation_id)
         
-        # Check if conversation has documents
-        if not conversation.documents:
-            raise ValidationException("No documents found in conversation")
-            
-        # Get document IDs
-        document_ids = conversation.documents
-        
-        # Query the RAG chain
-        response = await self.rag_chain.process_query(query, document_ids)
-        
-        # Add the query and response to the conversation
+        # Add the user query to the conversation before processing
         await self.add_message(conversation_id, "user", query)
-        await self.add_message(conversation_id, "assistant", response)
         
-        return response 
+        # Get project_id from the conversation
+        project_id = conversation.project_id
+        
+        # Initialize an empty set to avoid duplicates
+        document_ids = set()
+        
+        # 1. Get documents explicitly added to this conversation
+        if conversation.documents:
+            for doc_id in conversation.documents:
+                document_ids.add(str(doc_id))
+                print(f"Added document {doc_id} from conversation {conversation_id}")
+        
+        # 2. Get all documents from the project (if they're not already included)
+        if project_id:
+            try:
+                # Get documents associated with the project
+                project_documents = await self.document_repository.get_by_project(project_id)
+                for doc in project_documents:
+                    doc_id_str = str(doc.id)
+                    document_ids.add(doc_id_str)
+                    print(f"Added document {doc_id_str} from project {project_id}")
+            except Exception as e:
+                print(f"Error fetching project documents: {e}")
+        
+        # Convert set back to list
+        document_id_list = list(document_ids)
+        print(f"Documents IDs for query: {document_id_list}")
+        
+        # Check if we have any documents
+        if not document_id_list:
+            raise ValidationException("No documents found for this conversation or its project")
+        
+        # Get document objects from the repository
+        # This will help the RAG chain access document content and metadata
+        documents = []
+        try:
+            for doc_id in document_id_list:
+                try:
+                    doc = await self.document_repository.get_by_id(doc_id)
+                    if doc:
+                        documents.append(doc)
+                        print(f"Retrieved document {doc_id} from repository")
+                except Exception as e:
+                    print(f"Error retrieving document {doc_id}: {e}")
+        except Exception as e:
+            print(f"Error preparing documents: {e}")
+        
+        # Also pass the raw document IDs as strings in case the document objects
+        # are not properly recognized by the vector store
+        document_id_strings = [str(doc_id) for doc_id in document_id_list]
+        
+        # If we have document objects, pass those, otherwise fallback to ID strings
+        docs_to_query = documents if documents else document_id_strings
+        print(f"Passing {len(docs_to_query)} documents to RAG chain")
+        
+        try:
+            # Query the RAG chain with all available documents
+            response = await self.rag_chain.process_query(query, docs_to_query)
+            
+            # Add the assistant's response to the conversation
+            await self.add_message(conversation_id, "assistant", response)
+            
+            return response
+        except Exception as e:
+            error_msg = f"Error during RAG processing: {str(e)}"
+            print(error_msg)
+            # Still add a response to the conversation so the user knows something went wrong
+            await self.add_message(conversation_id, "assistant", f"I'm sorry, I encountered an error: {str(e)}")
+            raise ValidationException(error_msg) 

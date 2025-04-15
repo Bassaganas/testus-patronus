@@ -20,9 +20,10 @@ class ServiceFactory:
 
     def conversation_service(self):
         repository = ConversationRepository(self.db)
+        document_repository = DocumentRepository(self.db)
         vector_store = VectorStoreFactory.get_vector_store()
         rag_chain = RAGChainFactory.get_rag_chain()
-        return ConversationService(repository, vector_store, rag_chain)
+        return ConversationService(repository, document_repository, vector_store, rag_chain)
 
     def project_service(self):
         repository = ProjectRepository(self.db)

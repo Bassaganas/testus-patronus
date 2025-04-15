@@ -253,33 +253,56 @@ class RAGChain:
                 return "I don't have any documents to reference. Please upload some documents to help me provide a more informed response."
             
             # Extract document IDs
-            document_ids = [doc.id for doc in documents if hasattr(doc, 'id')]
-            logger.info(f"Extracted {len(document_ids)} document IDs")
+            document_ids = []
+            for doc in documents:
+                if hasattr(doc, 'id'):
+                    # If it's a document object
+                    document_ids.append(str(doc.id))
+                elif isinstance(doc, str):
+                    # If it's already a document ID string
+                    document_ids.append(doc)
+                else:
+                    logger.warning(f"Unrecognized document format: {type(doc)}")
             
-            # Get the conversation ID and project ID from the first document
-            conversation_id = documents[0].conversation_id if documents and hasattr(documents[0], 'conversation_id') else None
-            project_id = documents[0].project_id if documents and hasattr(documents[0], 'project_id') else None
+            logger.info(f"Extracted {len(document_ids)} document IDs: {document_ids}")
             
-            if conversation_id:
-                logger.info(f"Using conversation context: {conversation_id}")
-            if project_id:
-                logger.info(f"Using project context: {project_id}")
-            
-            # Get relevant documents using similarity search
+            # Get relevant documents using similarity search WITHOUT filtering by conversation_id or project_id
             try:
+                # IMPORTANT: We're searching ALL documents by setting conversation_id and project_id to None
+                # but we'll filter results later to include only documents from our list
                 relevant_docs = self.vector_store.similarity_search(
                     query=query,
-                    k=4,
-                    conversation_id=conversation_id,
-                    project_id=project_id
+                    k=8,  # Increase k to get more results
+                    conversation_id=None,  # Set to None to search all documents
+                    project_id=None,       # Set to None to search all documents
+                    score_threshold=0.0    # Set to 0 to return all results
                 )
+                logger.info(f"Search without filters returned {len(relevant_docs)} results")
+                
+                # Now filter to only keep documents from our list
+                filtered_docs = []
+                for doc in relevant_docs:
+                    if (doc.metadata and 
+                        "document_id" in doc.metadata and 
+                        doc.metadata["document_id"] in document_ids):
+                        filtered_docs.append(doc)
+                
+                logger.info(f"After filtering to requested documents: {len(filtered_docs)} results")
+                
+                # If we don't have any matching documents, fall back to using all retrieved documents
+                if not filtered_docs and relevant_docs:
+                    logger.warning("No matching documents after filtering, using all retrieved documents")
+                    filtered_docs = relevant_docs
+                
+                relevant_docs = filtered_docs
+                
             except Exception as e:
                 logger.error(f"Error in similarity search: {str(e)}")
                 # Fallback response
                 return "I encountered an issue searching through the documents. Please try again or rephrase your question."
             
             if not relevant_docs:
-                logger.warning("No relevant documents found for query")
+                logger.warning("No relevant documents found in query")
                 return "I couldn't find any relevant information in the documents to answer your question. Could you please rephrase or ask something else about the documents?"
             
             # Format documents for the prompt
@@ -287,7 +310,10 @@ class RAGChain:
                 formatted_docs = []
                 for doc in docs:
                     content = doc.page_content
-                    formatted_docs.append(content)
+                    metadata_str = ""
+                    if doc.metadata and "document_id" in doc.metadata:
+                        metadata_str = f" (from document: {doc.metadata.get('document_id', 'unknown')})"
+                    formatted_docs.append(f"{content}{metadata_str}")
                 return "\n\n".join(formatted_docs)
             
             # Create a temporary chain for this query

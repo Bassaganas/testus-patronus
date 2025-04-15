@@ -1,7 +1,7 @@
 from langchain_chroma import Chroma
 from langchain_openai import AzureOpenAIEmbeddings
-from langchain_core.documents import Document
-from typing import List, Optional, Dict, Any
+from langchain_core.documents import Document as LangchainDocument
+from typing import List, Optional, Dict, Any, Union
 import shutil
 import os
 import logging
@@ -64,54 +64,54 @@ class VectorStoreManager:
             logger.error(f"Health check failed: {str(e)}")
             return False
     
-    def add_documents(self, documents: List[Document], document_id: Optional[str] = None, 
+    def add_documents(self, documents: List[Union[dict, LangchainDocument]], document_id: Optional[str] = None, 
                     project_id: Optional[str] = None, conversation_id: Optional[str] = None) -> None:
         """
         Add documents to the vector store.
         
         Args:
-            documents (List[Document]): List of documents to add
+            documents (List[Union[dict, LangchainDocument]]): List of documents to add
             document_id (Optional[str]): ID of the document these chunks belong to
             project_id (Optional[str]): Project ID to associate with the document
             conversation_id (Optional[str]): Conversation ID to associate with the document
         """
         try:
-            # Log information about the documents being added
             logger.info(f"Adding {len(documents)} documents to vector store")
             if document_id:
                 logger.info(f"Document ID: {document_id}")
-            
-            # Add metadata to documents
+            fixed_documents = []
             for doc in documents:
-                if not doc.metadata:
-                    doc.metadata = {}
-                if document_id:
-                    doc.metadata["document_id"] = document_id
-                
-                # Check if project_id and conversation_id are passed directly
-                if project_id:
-                    doc.metadata["project_id"] = project_id
-                    logger.info(f"Adding project_id to document metadata: {project_id}")
-                if conversation_id:
-                    doc.metadata["conversation_id"] = conversation_id
-                    logger.info(f"Adding conversation_id to document metadata: {conversation_id}")
-                
-                # Check if metadata contains project_id or conversation_id
-                if not project_id and "metadata" in doc.metadata and doc.metadata.get("metadata", {}).get("project_id"):
-                    doc.metadata["project_id"] = doc.metadata["metadata"]["project_id"]
-                    logger.info(f"Adding project_id from document metadata: {doc.metadata['project_id']}")
-                if not conversation_id and "metadata" in doc.metadata and doc.metadata.get("metadata", {}).get("conversation_id"):
-                    doc.metadata["conversation_id"] = doc.metadata["metadata"]["conversation_id"]
-                    logger.info(f"Adding conversation_id from document metadata: {doc.metadata['conversation_id']}")
-            
-            # Add to vector store with better error handling and retries
+                # Always ensure metadata is a dict and set project_id/conversation_id if available
+                if isinstance(doc, dict):
+                    metadata = doc.get('metadata', {})
+                    if document_id:
+                        metadata["document_id"] = document_id
+                    if project_id is not None:
+                        metadata["project_id"] = project_id
+                    if conversation_id is not None:
+                        metadata["conversation_id"] = conversation_id
+                    doc['metadata'] = metadata
+                    logger.info(f"Indexing document (dict) with metadata: {metadata}")
+                    fixed_documents.append(LangchainDocument(
+                        page_content=doc.get("page_content", ""),
+                        metadata=metadata
+                    ))
+                else:
+                    if not hasattr(doc, 'metadata') or doc.metadata is None:
+                        doc.metadata = {}
+                    if document_id:
+                        doc.metadata["document_id"] = document_id
+                    if project_id is not None:
+                        doc.metadata["project_id"] = project_id
+                    if conversation_id is not None:
+                        doc.metadata["conversation_id"] = conversation_id
+                    logger.info(f"Indexing document (object) with metadata: {doc.metadata}")
+                    fixed_documents.append(doc)
             max_retries = 3
             retry_delay = 2  # seconds
-            
             for attempt in range(max_retries):
                 try:
-                    self.vector_store.add_documents(documents)
-                    # Note: Chroma automatically persists changes, no need to call persist()
+                    self.vector_store.add_documents(fixed_documents)
                     logger.info(f"Successfully added documents to vector store")
                     return  # Success, exit the function
                 except Exception as e:
@@ -123,7 +123,6 @@ class VectorStoreManager:
                     else:
                         logger.error(f"All {max_retries} attempts failed. Last error: {str(e)}")
                         raise
-            
         except Exception as e:
             logger.error(f"Error adding documents to vector store: {str(e)}")
             raise
@@ -156,8 +155,8 @@ class VectorStoreManager:
         k: int = 4, 
         conversation_id: Optional[str] = None,
         project_id: Optional[str] = None,
-        score_threshold: float = 0.5  # Lowered from 0.7 to be less strict
-    ) -> List[Document]:
+        score_threshold: float = 0.0  # Lowered from 0.7 to be less strict
+    ) -> List[LangchainDocument]:
         """
         Perform a similarity search on the vector store.
         
@@ -172,77 +171,95 @@ class VectorStoreManager:
             List of Document objects
         """
         try:
-            # First try with both filters if both are provided
-            if conversation_id and project_id:
+            # Always convert IDs to strings
+            conv_id_str = str(conversation_id) if conversation_id is not None else None
+            proj_id_str = str(project_id) if project_id is not None else None
+            
+            logger.info(f"Querying with conversation_id: {conv_id_str} (type: {type(conv_id_str)})")
+            logger.info(f"Querying with project_id: {proj_id_str} (type: {type(proj_id_str)})")
+            
+            # First, try a search with no filters at all, to see if the vector store has any documents
+            try:
+                logger.info("STEP 0: Trying search with no filters to check if vector store has any documents")
+                no_filter_results = self._execute_search(query, k=k, filter_dict=None, score_threshold=0.0)
+                if no_filter_results:
+                    # Log the metadata of all documents in the vector store to debug
+                    logger.info(f"Vector store has {len(no_filter_results)} documents total")
+                    for i, doc in enumerate(no_filter_results[:5]):  # Show first 5 only
+                        logger.info(f"Document {i} metadata: {doc.metadata}")
+                else:
+                    logger.warning("Vector store appears to be empty - no documents returned with no filter")
+            except Exception as e:
+                logger.error(f"Error in no-filter check: {str(e)}")
+            
+            # Now proceed with the actual filtered search
+            results = []
+            filter_dict = None
+            
+            # Skip empty string IDs
+            conv_id_str = conv_id_str if conv_id_str and conv_id_str.strip() else None
+            proj_id_str = proj_id_str if proj_id_str and proj_id_str.strip() else None
+            
+            if conv_id_str and proj_id_str:
                 filter_dict = {
                     "$and": [
-                        {"conversation_id": conversation_id},
-                        {"project_id": project_id}
+                        {"conversation_id": conv_id_str},
+                        {"project_id": proj_id_str}
                     ]
                 }
-                logger.info(f"Filtering search by conversation_id: {conversation_id} AND project_id: {project_id}")
-                
-                # Try the combined filter first
+                logger.info(f"STEP 1: Filter dict used in similarity_search: {filter_dict}")
                 results = self._execute_search(query, k, filter_dict, score_threshold)
                 if results:
                     return results
-                
-                # If no results, try with just conversation_id
-                logger.info(f"No results with combined filters, trying just conversation_id: {conversation_id}")
-                filter_dict = {"conversation_id": conversation_id}
+                logger.info(f"No results with combined filters, trying just conversation_id: {conv_id_str}")
+                filter_dict = {"conversation_id": conv_id_str}
+                logger.info(f"STEP 2: Filter dict used in similarity_search: {filter_dict}")
                 results = self._execute_search(query, k, filter_dict, score_threshold)
                 if results:
                     return results
-                
-                # If still no results, try with just project_id
-                logger.info(f"No results with conversation_id, trying just project_id: {project_id}")
-                filter_dict = {"project_id": project_id}
+                logger.info(f"No results with conversation_id, trying just project_id: {proj_id_str}")
+                filter_dict = {"project_id": proj_id_str}
+                logger.info(f"STEP 3: Filter dict used in similarity_search: {filter_dict}")
                 results = self._execute_search(query, k, filter_dict, score_threshold)
                 if results:
                     return results
-                
-                # If still no results, try without filters but with a lower threshold
                 logger.info("No results with any filters, trying without filters")
-                return self._execute_search(query, k, None, score_threshold * 0.7)  # Lower threshold by 30%
-                
-            elif conversation_id:
-                # Only conversation_id provided
-                filter_dict = {"conversation_id": conversation_id}
-                logger.info(f"Filtering search by conversation_id: {conversation_id}")
-                
+                results = self._execute_search(query, k, None, 0.0)
+                logger.info(f"STEP 4: Results with no filter: {len(results)} documents")
+                return results
+            elif conv_id_str:
+                filter_dict = {"conversation_id": conv_id_str}
+                logger.info(f"Filtering search by conversation_id: {conv_id_str}")
+                logger.info(f"STEP 5: Filter dict used in similarity_search: {filter_dict}")
                 results = self._execute_search(query, k, filter_dict, score_threshold)
                 if results:
                     return results
-                    
-                # Try without filters if no results
                 logger.info("No results with conversation_id filter, trying without filters")
-                return self._execute_search(query, k, None, score_threshold * 0.7)
-                
-            elif project_id:
-                # Only project_id provided
-                filter_dict = {"project_id": project_id}
-                logger.info(f"Filtering search by project_id: {project_id}")
-                
+                results = self._execute_search(query, k, None, 0.0)
+                logger.info(f"STEP 6: Results with no filter: {len(results)} documents")
+                return results
+            elif proj_id_str:
+                filter_dict = {"project_id": proj_id_str}
+                logger.info(f"Filtering search by project_id: {proj_id_str}")
+                logger.info(f"STEP 7: Filter dict used in similarity_search: {filter_dict}")
                 results = self._execute_search(query, k, filter_dict, score_threshold)
                 if results:
                     return results
-                    
-                # Try without filters if no results
                 logger.info("No results with project_id filter, trying without filters")
-                return self._execute_search(query, k, None, score_threshold * 0.7)
-                
+                results = self._execute_search(query, k, None, 0.0)
+                logger.info(f"STEP 8: Results with no filter: {len(results)} documents")
+                return results
             else:
-                # No filters provided
                 logger.info("No filters provided, searching all documents")
-                return self._execute_search(query, k, None, score_threshold)
-            
+                results = self._execute_search(query, k, None, score_threshold)
+                logger.info(f"STEP 9: Results with no filter: {len(results)} documents")
+                return results
         except Exception as e:
             logger.error(f"Error in similarity search: {str(e)}")
-            # Return empty results instead of raising to avoid breaking the entire query
             logger.warning("Returning empty results due to search error")
             return []
             
-    def _execute_search(self, query: str, k: int, filter_dict: Optional[Dict] = None, score_threshold: float = 0.5) -> List[Document]:
+    def _execute_search(self, query: str, k: int, filter_dict: Optional[Dict] = None, score_threshold: float = 0.5) -> List[LangchainDocument]:
         """
         Helper method to execute a search with the given parameters and filter results by score.
         
@@ -256,38 +273,44 @@ class VectorStoreManager:
             List of filtered Document objects
         """
         try:
-            # Log the search query
             logger.info(f"Performing similarity search with query: '{query[:50]}...' (k={k})")
-            
-            # Prepare search kwargs
             search_kwargs = {"k": k}
             if filter_dict:
                 search_kwargs["filter"] = filter_dict
                 logger.info(f"Using filter: {filter_dict}")
             
-            # Execute search
-            results = self.vector_store.similarity_search_with_score(query, **search_kwargs)
-            
-            # Apply score threshold manually after the query
-            filtered_results = []
-            for doc, score in results:
-                # Note: similarity_search_with_score returns distance, not similarity
-                # Lower distance means higher similarity, so we need to invert the comparison
-                similarity = 1.0 - score  # Convert distance to similarity score
-                if similarity >= score_threshold:
-                    if not doc.metadata:
-                        doc.metadata = {}
-                    doc.metadata["score"] = similarity
-                    filtered_results.append(doc)
-            
-            logger.info(f"Search returned {len(filtered_results)} results after filtering by score threshold {score_threshold}")
-            return filtered_results
-            
+            try:
+                results = self.vector_store.similarity_search_with_score(query, **search_kwargs)
+                # Log all results before filtering
+                for doc, score in results:
+                    logger.info(f"Retrieved doc metadata: {getattr(doc, 'metadata', None)}, score: {score}")
+                
+                filtered_results = []
+                for doc, score in results:
+                    similarity = 1.0 - score  # Convert distance to similarity score
+                    if similarity >= score_threshold:
+                        if not doc.metadata:
+                            doc.metadata = {}
+                        doc.metadata["score"] = similarity
+                        filtered_results.append(doc)
+                logger.info(f"Search returned {len(filtered_results)} results after filtering by score threshold {score_threshold}")
+                return filtered_results
+            except Exception as e:
+                logger.error(f"Error in vector store search: {str(e)}")
+                # Try a simpler approach if the complex search fails
+                logger.info("Attempting fallback to basic similarity search without scores")
+                try:
+                    basic_results = self.vector_store.similarity_search(query, **search_kwargs)
+                    return basic_results
+                except Exception as e2:
+                    logger.error(f"Fallback search also failed: {str(e2)}")
+                    return []
+                
         except Exception as e:
             logger.warning(f"Error in execute_search: {str(e)}")
             return []
     
-    def get_document(self, document_id: str) -> List[Document]:
+    def get_document(self, document_id: str) -> List[LangchainDocument]:
         """
         Retrieve all chunks for a specific document.
         
@@ -314,7 +337,7 @@ class VectorStoreManager:
                 if not metadata:
                     metadata = {}
                 metadata["score"] = 1 - distance  # Convert distance to similarity score
-                documents.append(Document(page_content=doc, metadata=metadata))
+                documents.append(LangchainDocument(page_content=doc, metadata=metadata))
             
             logger.info(f"Retrieved {len(documents)} chunks for document {document_id}")
             return documents
@@ -427,7 +450,7 @@ class VectorStoreManager:
                     metadata["conversation_id"] = conversation_id
                 
                 # Create a new document with the updated metadata
-                updated_chunk = Document(
+                updated_chunk = LangchainDocument(
                     page_content=chunk.page_content,
                     metadata=metadata
                 )

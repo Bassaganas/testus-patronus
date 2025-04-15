@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from uuid import UUID
+from pydantic import BaseModel
 
 from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse
 from app.application.services.conversation_service import ConversationService
@@ -241,23 +242,30 @@ async def remove_document(
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+class QueryRequest(BaseModel):
+    query: str
+
 @router.post(
     "/{conversation_id}/query",
     response_model=str,
     summary="Query Conversation",
-    description="Query a conversation using RAG"
+    description="Query a conversation using RAG with documents from both the conversation and its project"
 )
 async def query_conversation(
     conversation_id: UUID,
-    query: str,
+    request: QueryRequest,
     service: ConversationService = Depends(get_conversation_service)
 ):
     """
-    Query a conversation using RAG.
+    Query a conversation using RAG (Retrieval Augmented Generation).
+    
+    This endpoint searches for relevant documents from:
+    1. Documents explicitly associated with this conversation
+    2. All documents that belong to the project this conversation is part of
     
     Args:
         conversation_id: Conversation ID
-        query: Query text
+        request: QueryRequest containing the query text
         service: Conversation service
         
     Returns:
@@ -268,6 +276,8 @@ async def query_conversation(
         ValidationException: If no documents are found
     """
     try:
-        return await service.query_conversation(conversation_id, query)
-    except (NotFoundException, ValidationException) as e:
-        raise HTTPException(status_code=404, detail=str(e)) 
+        return await service.query_conversation(conversation_id, request.query)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValidationException as e:
+        raise HTTPException(status_code=400, detail=str(e)) 

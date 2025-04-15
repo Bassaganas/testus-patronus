@@ -143,10 +143,7 @@ async def delete_project(
         NotFoundException: If project not found
     """
     try:
-        # Get the project data before deletion
-        project = await service.get_project_by_id(project_id)
-        # Delete the project
-        await service.delete_project(project_id)
-        return project
+        # Delete the project and return the project data
+        return await service.delete_project(project_id)
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e)) 

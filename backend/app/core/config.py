@@ -10,7 +10,7 @@ from pathlib import Path
 logger = logging.getLogger("testus-patronus")
 
 # Get the absolute path to the backend directory
-BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 # Load the appropriate .env file based on environment
 env_file = BACKEND_DIR / (".env.development" if os.getenv("ENV") == "development" else ".env")
@@ -21,6 +21,11 @@ load_dotenv(env_file)
 logger.info(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
 logger.info(f"DB_PATH: {os.getenv('DB_PATH')}")
 logger.info(f"ALLOWED_ORIGINS: {os.getenv('ALLOWED_ORIGINS')}")
+
+VECTOR_STORE_DIR = os.getenv(
+    "VECTOR_STORE_DIR",
+    str(BACKEND_DIR / "data" / "vector_store")
+)
 
 class Settings(BaseSettings):
     # Project Information

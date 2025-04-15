@@ -56,6 +56,8 @@ class DocumentService:
         # Process the file
         document_data = await file_processor.process_upload(file)
         
+        print(f"Upload document - Project ID: {project_id}, Conversation ID: {conversation_id}")
+        
         # Create document
         document_create = DocumentCreate(
             title=document_data.title,
@@ -64,7 +66,7 @@ class DocumentService:
             file_type=file.content_type,
             file_size=document_data.metadata.get("file_size"),
             content=document_data.content,
-            metadata=document_data.metadata,
+            doc_metadata=document_data.metadata,
             project_id=project_id,
             conversation_id=conversation_id
         )
@@ -72,14 +74,50 @@ class DocumentService:
         # Save to database
         document = await self.repository.create(document_create)
         
+        print(f"Created document in DB: ID={document.id}, Type={type(document.id)}")
+        
+        # If conversation_id is provided, associate the document with the conversation
+        if conversation_id:
+            from app.infrastructure.repositories.conversation_repository import ConversationRepository
+            conversation_repo = ConversationRepository(self.repository.db)
+            try:
+                await conversation_repo.add_document(conversation_id, document.id)
+                print(f"Associated document {document.id} with conversation {conversation_id}")
+            except Exception as e:
+                print(f"Error associating document with conversation: {e}")
+        
         # Add to vector store
         if document.content:
+            # Merge all metadata for the vector store
+            vector_metadata = dict(document_data.metadata) if document_data.metadata else {}
+            
+            # Convert all IDs to strings to ensure consistency
+            document_id_str = str(document.id)
+            project_id_str = str(project_id) if project_id else None
+            conversation_id_str = str(conversation_id) if conversation_id else None
+            
+            vector_metadata["document_id"] = document_id_str
+            if project_id_str:
+                vector_metadata["project_id"] = project_id_str
+            if conversation_id_str:
+                vector_metadata["conversation_id"] = conversation_id_str
+                
+            print(f"Adding document to vector store with metadata: {vector_metadata}")
+            
+            # Add document to vector store
             self.vector_store.add_documents(
-                [{"content": document.content, "metadata": {"document_id": str(document.id)}}],
-                document_id=str(document.id),
-                project_id=str(project_id) if project_id else None,
-                conversation_id=str(conversation_id) if conversation_id else None
+                [{"page_content": document.content, "metadata": vector_metadata}],
+                document_id=document_id_str,
+                project_id=project_id_str,
+                conversation_id=conversation_id_str
             )
+            
+            # Verify document was added to vector store
+            try:
+                docs = self.vector_store.get_document(document_id_str)
+                print(f"Retrieved {len(docs)} chunks for document {document_id_str} from vector store")
+            except Exception as e:
+                print(f"Error verifying document in vector store: {e}")
         
         return document
 
@@ -107,7 +145,7 @@ class DocumentService:
             source_type=source_type,
             source_id=source_id,
             content=document_data.content,
-            metadata=document_data.metadata,
+            doc_metadata=document_data.metadata,
             project_id=project_id,
             conversation_id=conversation_id
         )
@@ -115,10 +153,26 @@ class DocumentService:
         # Save to database
         document = await self.repository.create(document_create)
         
+        # If conversation_id is provided, associate the document with the conversation
+        if conversation_id:
+            from app.infrastructure.repositories.conversation_repository import ConversationRepository
+            conversation_repo = ConversationRepository(self.repository.db)
+            try:
+                await conversation_repo.add_document(conversation_id, document.id)
+            except Exception as e:
+                print(f"Error associating document with conversation: {e}")
+        
         # Add to vector store
         if document.content:
+            # Create metadata for vector store
+            vector_metadata = {"document_id": str(document.id)}
+            if project_id:
+                vector_metadata["project_id"] = str(project_id)
+            if conversation_id:
+                vector_metadata["conversation_id"] = str(conversation_id)
+                
             self.vector_store.add_documents(
-                [{"content": document.content, "metadata": {"document_id": str(document.id)}}],
+                [{"page_content": document.content, "metadata": vector_metadata}],
                 document_id=str(document.id),
                 project_id=str(project_id) if project_id else None,
                 conversation_id=str(conversation_id) if conversation_id else None
@@ -137,13 +191,35 @@ class DocumentService:
         # Check if document exists
         existing_document = await self.get_document(document_id)
         
-        # Update document
-        updated_document = await self.repository.update(document_id, document_update)
+        # Check if conversation_id is being updated
+        new_conversation_id = document_update.conversation_id
+        if new_conversation_id and new_conversation_id != existing_document.conversation_id:
+            # First, update the database record
+            updated_document = await self.repository.update(document_id, document_update)
+            
+            # Then, update the many-to-many relationship
+            from app.infrastructure.repositories.conversation_repository import ConversationRepository
+            conversation_repo = ConversationRepository(self.repository.db)
+            try:
+                # Add to new conversation if specified
+                await conversation_repo.add_document(new_conversation_id, document_id)
+            except Exception as e:
+                print(f"Error updating document's conversation: {e}")
+        else:
+            # Regular update without conversation changes
+            updated_document = await self.repository.update(document_id, document_update)
         
         # Update vector store if content changed
         if document_update.content and document_update.content != existing_document.content:
+            # Create metadata for vector store
+            vector_metadata = {"document_id": str(updated_document.id)}
+            if updated_document.project_id:
+                vector_metadata["project_id"] = str(updated_document.project_id)
+            if updated_document.conversation_id:
+                vector_metadata["conversation_id"] = str(updated_document.conversation_id)
+                
             self.vector_store.add_documents(
-                [{"content": updated_document.content, "metadata": {"document_id": str(updated_document.id)}}],
+                [{"page_content": updated_document.content, "metadata": vector_metadata}],
                 document_id=str(updated_document.id),
                 project_id=str(updated_document.project_id) if updated_document.project_id else None,
                 conversation_id=str(updated_document.conversation_id) if updated_document.conversation_id else None

@@ -39,15 +39,24 @@ async def get_document(
     "/upload",
     response_model=DocumentResponse,
     summary="Upload Document",
-    description="Upload and process a new document"
+    description="Upload and process a new document, associating it with a project and optionally a conversation"
 )
 async def upload_document(
     file: UploadFile = File(...),
     project_id: Optional[str] = Query(None, description="Project ID to associate the document with"),
-    conversation_id: Optional[str] = Query(None, description="Conversation ID to associate the document with"),
+    conversation_id: Optional[str] = Query(None, description="Conversation ID to explicitly associate the document with"),
     service: DocumentService = Depends(get_document_service)
 ):
-    """Upload and process a new document."""
+    """
+    Upload and process a new document.
+    
+    Documents can be:
+    - Associated with a project (recommended)
+    - Explicitly associated with a conversation (optional)
+    
+    Documents associated with a project will be available for queries from all conversations in that project.
+    Documents explicitly associated with a conversation will be prioritized in that conversation's queries.
+    """
     return await service.upload_document(file, project_id, conversation_id)
 
 @router.post(
