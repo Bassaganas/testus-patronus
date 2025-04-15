@@ -4,24 +4,10 @@ from uuid import UUID
 
 from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse
 from app.application.services.conversation_service import ConversationService
-from app.infrastructure.database.session import get_db
-from app.infrastructure.vector_store.vector_store import VectorStoreManager
-from app.infrastructure.repositories.conversation_repository import ConversationRepository
-from app.infrastructure.rag.rag_chain import RAGChain, get_rag_chain
+from app.api.container import get_conversation_service
 from app.core.exceptions import NotFoundException, ValidationException
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
-
-async def get_conversation_service(
-    db = Depends(get_db),
-    vector_store: VectorStoreManager = Depends(VectorStoreManager),
-    rag_chain: RAGChain = Depends(get_rag_chain)
-) -> ConversationService:
-    """
-    Get conversation service
-    """
-    repository = ConversationRepository(db)
-    return ConversationService(repository, vector_store, rag_chain)
 
 @router.get(
     "",

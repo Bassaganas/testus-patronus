@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from app.domain.schemas.document import DocumentResponse, DocumentSourceConfig, DocumentUpdate
 from app.application.services.document_service import DocumentService
-from app.api.v1.dependencies.services import get_document_service
+from app.api.container import get_document_service
 from app.core.exceptions import NotFoundException, ValidationException
 
 router = APIRouter(prefix="/documents", tags=["Documents"])

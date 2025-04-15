@@ -5,22 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
 from app.application.services.project_service import ProjectService
-from app.infrastructure.database.session import get_db
-from app.infrastructure.vector_store.vector_store import VectorStoreManager
-from app.infrastructure.repositories.project_repository import ProjectRepository
+from app.api.container import get_project_service
 from app.core.exceptions import NotFoundException, ValidationException
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
-
-async def get_project_service(
-    db: AsyncSession = Depends(get_db),
-    vector_store: VectorStoreManager = Depends(VectorStoreManager)
-) -> ProjectService:
-    """
-    Get project service
-    """
-    repository = ProjectRepository(db)
-    return ProjectService(repository, vector_store)
 
 @router.get(
     "",
