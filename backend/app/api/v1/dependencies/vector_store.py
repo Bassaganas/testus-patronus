@@ -1,4 +1,4 @@
-from app.vector_store import VectorStoreManager
+from app.infrastructure.vector_store.vector_store import VectorStoreManager
 from functools import lru_cache
 
 @lru_cache()

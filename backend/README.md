@@ -1,5 +1,103 @@
 # Testus Patronus Backend
 
+A FastAPI-based backend for document processing and RAG (Retrieval-Augmented Generation).
+
+## Clean Architecture
+
+This project follows Clean Architecture principles, which separates the codebase into distinct layers:
+
+### 1. Domain Layer
+
+The domain layer contains the core business logic and entities of the application. It is the most inner layer and has no dependencies on other layers.
+
+- **Domain Models**: Core business entities (e.g., `Project`, `Document`, `Conversation`)
+- **Domain Schemas**: Data transfer objects (DTOs) for API requests and responses
+
+### 2. Application Layer
+
+The application layer contains the business logic and use cases of the application. It depends on the domain layer.
+
+- **Services**: Business logic and use cases (e.g., `ProjectService`, `DocumentService`)
+- **Repositories**: Interfaces for data access (e.g., `ProjectRepository`, `DocumentRepository`)
+
+### 3. Infrastructure Layer
+
+The infrastructure layer contains the implementation details of the application. It depends on the application layer.
+
+- **Database**: Database models and session management
+- **Vector Store**: Vector store implementation for document embeddings
+- **External Services**: Integration with external services
+
+### 4. API Layer
+
+The API layer contains the entry points of the application. It depends on the application layer.
+
+- **Endpoints**: API endpoints (e.g., `/projects`, `/documents`, `/conversations`)
+- **Dependencies**: Dependency injection for services and repositories
+- **Exceptions**: API-specific exceptions
+
+## Project Structure
+
+```
+backend/
+├── app/
+│   ├── api/                  # API Layer
+│   │   ├── v1/
+│   │   │   ├── endpoints/    # API endpoints
+│   │   │   ├── dependencies/ # Dependency injection
+│   │   │   ├── exceptions.py # API exceptions
+│   │   │   └── router.py     # API router
+│   │   └── __init__.py
+│   ├── core/                 # Core functionality
+│   │   ├── config.py         # Application configuration
+│   │   ├── exceptions.py     # Core exceptions
+│   │   └── logging.py        # Logging configuration
+│   ├── domain/               # Domain Layer
+│   │   ├── models/           # Domain models
+│   │   └── schemas/          # Domain schemas
+│   ├── infrastructure/       # Infrastructure Layer
+│   │   ├── database/         # Database implementation
+│   │   └── vector_store/     # Vector store implementation
+│   ├── repositories/         # Repository implementations
+│   ├── services/             # Service implementations
+│   ├── main.py               # Application entry point
+│   └── __init__.py
+```
+
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies: `pip install -r requirements.txt`
+3. Set up environment variables: `cp .env.example .env`
+4. Run the application: `python -m app.main`
+
+## API Documentation
+
+- Swagger UI: `/docs`
+- ReDoc: `/redoc`
+- OpenAPI: `/openapi.json`
+
+## Development
+
+### Adding a New Feature
+
+1. Define the domain model and schema in the domain layer
+2. Implement the repository in the repositories layer
+3. Implement the service in the services layer
+4. Create the API endpoint in the API layer
+
+### Testing
+
+Run tests with pytest:
+
+```bash
+pytest
+```
+
+## License
+
+MIT
+
 ## Quick Start with GitHub Codespaces
 
 1. Click the green "Code" button on the repository
@@ -57,13 +155,6 @@ The application comes pre-configured for development with `.env.development`. He
 
 ### Database Settings
 - `DATABASE_URL`: SQLite database location
-
-## API Documentation
-
-Once the application is running, you can access:
-- Swagger UI: `/docs`
-- ReDoc: `/redoc`
-- OpenAPI Schema: `/openapi.json`
 
 ## Development Tools
 

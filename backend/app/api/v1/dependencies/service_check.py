@@ -1,7 +1,7 @@
 from typing import Dict
 import httpx
-from app.vector_store import VectorStoreManager
-from app.config import settings
+from app.infrastructure.vector_store.vector_store import VectorStoreManager
+from app.core.config import settings
 
 async def check_services() -> Dict[str, str]:
     """

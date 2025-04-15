@@ -1,4 +1,4 @@
-from app.rag_chain import RAGChain
+from app.infrastructure.rag.rag_chain import RAGChain
 from app.api.v1.dependencies.vector_store import get_vector_store
 from functools import lru_cache
 

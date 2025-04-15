@@ -1,8 +1,9 @@
 import logging
 import os
 
-from app.api.v1.api import router as api_v1_router
-from app.config import settings
+from app.api.v1.router import router as api_v1_router
+from app.core.config import settings
+from app.infrastructure.database.init_db import init_db
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,9 +16,9 @@ logging.basicConfig(
 logger = logging.getLogger("testus-patronus")
 
 app = FastAPI(
-    title="Testus Patronus API",
+    title=settings.PROJECT_NAME,
     description="RAG-based API for document querying and processing",
-    version="1.0.0",
+    version=settings.VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -25,7 +26,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.origins,
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +40,11 @@ async def startup_event():
     """
     Startup event handler that runs when the application starts.
     """
+    # Initialize the database
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database initialized successfully")
+    
     # Harry Potter style ASCII art
     ascii_art = """
     \033[1;33m
@@ -77,8 +83,8 @@ async def root():
     Returns basic API information.
     """
     return {
-        "name": "Testus Patronus API",
-        "version": "1.0.0",
+        "name": settings.PROJECT_NAME,
+        "version": settings.VERSION,
         "documentation": "/docs",
         "status": "operational",
     }
