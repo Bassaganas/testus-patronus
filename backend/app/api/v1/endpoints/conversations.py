@@ -3,7 +3,7 @@ from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel
 
-from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse
+from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse, MessageBase
 from app.application.services.conversation_service import ConversationService
 from app.api.container import get_conversation_service
 from app.core.exceptions import NotFoundException, ValidationException
@@ -158,8 +158,7 @@ async def delete_conversation(
 )
 async def add_message(
     conversation_id: UUID,
-    role: str,
-    content: str,
+    message: MessageBase,
     service: ConversationService = Depends(get_conversation_service)
 ):
     """
@@ -167,8 +166,7 @@ async def add_message(
     
     Args:
         conversation_id: Conversation ID
-        role: Message role (user or assistant)
-        content: Message content
+        message: Message data (role and content)
         service: Conversation service
         
     Returns:
@@ -176,11 +174,14 @@ async def add_message(
         
     Raises:
         NotFoundException: If conversation not found
+        ValidationException: If message data is invalid
     """
     try:
-        return await service.add_message(conversation_id, role, content)
+        return await service.add_message(conversation_id, message.role, message.content)
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValidationException as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 @router.post(
     "/{conversation_id}/documents/{document_id}",

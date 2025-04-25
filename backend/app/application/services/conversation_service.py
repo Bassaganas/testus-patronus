@@ -39,6 +39,29 @@ class ConversationService:
         self.vector_store.delete_conversation_documents(conversation_id)
 
     async def add_message(self, conversation_id: UUID, role: str, content: str) -> ConversationResponse:
+        """
+        Add a message to a conversation.
+        
+        Args:
+            conversation_id: The conversation ID
+            role: The message role (must be 'user' or 'assistant')
+            content: The message content
+            
+        Returns:
+            ConversationResponse: Updated conversation
+            
+        Raises:
+            NotFoundException: If conversation not found
+            ValidationException: If message data is invalid
+        """
+        # Validate role
+        if not role or role not in ["user", "assistant"]:
+            raise ValidationException("Message role must be either 'user' or 'assistant'")
+            
+        # Validate content
+        if not content:
+            raise ValidationException("Message content cannot be empty")
+            
         conversation = await self.get_conversation_by_id(conversation_id)
         return await self.repository.add_message(conversation_id, {"role": role, "content": content})
 

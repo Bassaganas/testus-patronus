@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict, StringConstraints
+from pydantic import BaseModel, Field, ConfigDict, StringConstraints, UUID4, validator
 from typing import List, Optional, Annotated, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -7,8 +7,17 @@ class MessageBase(BaseModel):
     """
     Base schema for Message
     """
-    role: Annotated[str, StringConstraints(min_length=1, max_length=20)]
+    role: Annotated[str, StringConstraints(min_length=1, max_length=20, pattern="^(user|assistant)$")]
     content: Annotated[str, StringConstraints(min_length=1, max_length=10000)]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "role": "user",
+                "content": "Hello, how can you help me?"
+            }
+        }
+    )
 
 class MessageResponse(MessageBase):
     """
@@ -35,6 +44,15 @@ class ConversationBase(BaseModel):
     """
     title: Annotated[str, StringConstraints(min_length=1, max_length=100)]
     project_id: Optional[str] = None
+
+    @validator('project_id')
+    def validate_project_id(cls, v):
+        if v is not None:
+            try:
+                UUID(v)
+            except ValueError:
+                raise ValueError('project_id must be a valid UUID')
+        return v
 
 class ConversationCreate(ConversationBase):
     """

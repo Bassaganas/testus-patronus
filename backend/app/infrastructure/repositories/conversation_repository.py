@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 
@@ -91,20 +91,24 @@ class ConversationRepository:
         return ConversationResponse.model_validate(conv_dict)
 
     async def update(self, conversation_id: UUID, conversation: ConversationUpdate) -> ConversationResponse:
-        db_conversation = await self.get_by_id(conversation_id)
-        update_data = conversation.model_dump(exclude_unset=True)
-        for key, value in update_data.items():
-            setattr(db_conversation, key, value)
-        await self.db.commit()
-        await self.db.refresh(db_conversation)
-        
-        # Reload the conversation with relationships
+        # Get the conversation database model with documents eagerly loaded
         result = await self.db.execute(
             select(Conversation)
             .where(Conversation.id == str(conversation_id))
             .options(selectinload(Conversation.documents))
         )
-        db_conversation = result.scalar_one()
+        db_conversation = result.scalar_one_or_none()
+        if not db_conversation:
+            raise NotFoundException(f"Conversation with id {conversation_id} not found")
+
+        # Update the database model with the new data
+        update_data = conversation.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(db_conversation, key, value)
+        
+        db_conversation.updated_at = datetime.utcnow()
+        await self.db.commit()
+        await self.db.refresh(db_conversation)
         
         # Create a dict representation of the conversation
         conv_dict = {
@@ -119,13 +123,19 @@ class ConversationRepository:
         return ConversationResponse.model_validate(conv_dict)
 
     async def delete(self, conversation_id: UUID) -> None:
-        db_conversation = await self.get_by_id(conversation_id)
+        # Get the conversation database model
+        result = await self.db.execute(
+            select(Conversation)
+            .where(Conversation.id == str(conversation_id))
+        )
+        db_conversation = result.scalar_one_or_none()
+        if not db_conversation:
+            raise NotFoundException(f"Conversation with id {conversation_id} not found")
+            
         await self.db.delete(db_conversation)
         await self.db.commit()
 
-    async def add_message(
-        self, conversation_id: UUID, message: Dict[str, str]
-    ) -> ConversationResponse:
+    async def add_message(self, conversation_id: UUID, message: Dict[str, str]) -> ConversationResponse:
         # Get the conversation database model with documents eagerly loaded
         result = await self.db.execute(
             select(Conversation)
@@ -144,9 +154,26 @@ class ConversationRepository:
         db_conversation.messages.append(message)
         db_conversation.updated_at = datetime.utcnow()
         
+        # Update the messages column directly
+        await self.db.execute(
+            update(Conversation)
+            .where(Conversation.id == str(conversation_id))
+            .values(
+                messages=db_conversation.messages,
+                updated_at=db_conversation.updated_at
+            )
+        )
+        
         # Commit changes to the database
         await self.db.commit()
-        await self.db.refresh(db_conversation)
+        
+        # Reload the conversation with relationships
+        result = await self.db.execute(
+            select(Conversation)
+            .where(Conversation.id == str(conversation_id))
+            .options(selectinload(Conversation.documents))
+        )
+        db_conversation = result.scalar_one()
         
         # Convert the database model to a schema response
         conv_dict = {
