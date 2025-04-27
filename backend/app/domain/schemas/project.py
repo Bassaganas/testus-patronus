@@ -14,7 +14,7 @@ class ProjectCreate(ProjectBase):
     """
     Schema for creating a Project
     """
-    pass
+    id: Optional[str | UUID] = None
 
 class ProjectUpdate(ProjectBase):
     """
@@ -26,11 +26,11 @@ class ProjectResponse(ProjectBase):
     """
     Schema for Project response
     """
-    id: UUID
+    id: str | UUID
     created_at: datetime
     updated_at: datetime
-    documents: List[UUID] = Field(default_factory=list)
-    conversations: List[UUID] = Field(default_factory=list)
+    documents: List[str | UUID] = Field(default_factory=list)
+    conversations: List[str | UUID] = Field(default_factory=list)
 
     model_config = ConfigDict(
         from_attributes=True,

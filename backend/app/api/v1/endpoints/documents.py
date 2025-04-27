@@ -5,6 +5,7 @@ from app.domain.schemas.document import DocumentResponse, DocumentSourceConfig, 
 from app.application.services.document_service import DocumentService
 from app.api.container import get_document_service
 from app.core.exceptions import NotFoundException, ValidationException
+from app.infrastructure.vector_store.vector_store import VectorStoreManager
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -94,6 +95,26 @@ async def update_document(
     """Update a document."""
     return await service.update_document(document_id, document)
 
+@router.get(
+    "/{document_id}/vector",
+    summary="Check Document in Vector Store",
+    description="Check if a document exists in the vector store and return its contents"
+)
+async def check_document_in_vector_store(
+    document_id: str,
+    vector_store: VectorStoreManager = Depends(VectorStoreManager)
+):
+    """Check if a document exists in the vector store and return its contents."""
+    try:
+        documents = vector_store.get_document(document_id)
+        if not documents:
+            raise HTTPException(status_code=404, detail="Document not found in vector store")
+        return [{"content": doc.page_content, "metadata": doc.metadata} for doc in documents]
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete(
     "/{document_id}",
     summary="Delete Document",
@@ -105,4 +126,68 @@ async def delete_document(
 ):
     """Delete a document."""
     await service.delete_document(document_id)
-    return {"message": "Document deleted successfully"} 
+    return {"message": "Document deleted successfully"}
+
+@router.get(
+    "/vector/check",
+    summary="Check Documents in Vector Store",
+    description="Check documents in the vector store for a specific project or conversation"
+)
+async def check_documents_in_vector_store(
+    project_id: Optional[str] = Query(None, description="Filter documents by project ID"),
+    conversation_id: Optional[str] = Query(None, description="Filter documents by conversation ID"),
+    limit: int = Query(5, description="Maximum number of documents to return"),
+    vector_store: VectorStoreManager = Depends(VectorStoreManager)
+):
+    """Check documents in the vector store for a specific project or conversation."""
+    try:
+        # Build filter dictionary
+        filter_dict = {}
+        if project_id:
+            filter_dict["project_id"] = project_id
+        if conversation_id:
+            filter_dict["conversation_id"] = conversation_id
+            
+        # If no filters, return a message
+        if not filter_dict:
+            return {"message": "Please provide project_id or conversation_id to filter documents"}
+            
+        # Perform a search with a generic query to get documents
+        results = vector_store._execute_search(
+            query="Find all documents", 
+            k=limit, 
+            filter_dict=filter_dict, 
+            score_threshold=0.0
+        )
+        
+        if not results:
+            return {"message": f"No documents found in vector store with the specified filters"}
+            
+        # Format the results
+        formatted_results = []
+        for i, doc in enumerate(results):
+            # Get a preview of the content
+            content_preview = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
+            
+            result = {
+                "index": i+1,
+                "document_id": doc.metadata.get("document_id", "Unknown"),
+                "source_type": doc.metadata.get("source_type", "Unknown"),
+                "content_preview": content_preview,
+                "metadata": doc.metadata
+            }
+            
+            # Add Jira-specific fields if available
+            if doc.metadata.get("source_type") == "jira":
+                result["issue_key"] = doc.metadata.get("issue_key", "Unknown")
+                result["issue_type"] = doc.metadata.get("issue_type", "Unknown")
+                result["status"] = doc.metadata.get("status", "Unknown")
+                
+            formatted_results.append(result)
+            
+        return {
+            "count": len(results),
+            "documents": formatted_results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 

@@ -37,12 +37,9 @@ app.include_router(api_v1_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    Startup event handler that runs when the application starts.
-    """
-    # Initialize the database
+    """Initialize the database on startup."""
     logger.info("Initializing database...")
-    init_db()
+    await init_db()
     logger.info("Database initialized successfully")
     
     # Harry Potter style ASCII art

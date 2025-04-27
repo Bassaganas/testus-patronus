@@ -7,6 +7,7 @@ from app.application.services.project_service import ProjectService
 from app.infrastructure.factories.vector_store_factory import VectorStoreFactory
 from app.infrastructure.factories.rag_chain_factory import RAGChainFactory
 from app.infrastructure.factories.document_processor_factory import DocumentProcessorFactory
+from app.infrastructure.document_sources.jira_source import JiraDocumentSource
 
 class ServiceFactory:
     def __init__(self, db):
@@ -15,7 +16,10 @@ class ServiceFactory:
     def document_service(self):
         repository = DocumentRepository(self.db)
         vector_store = VectorStoreFactory.get_vector_store()
-        document_sources = {"file": DocumentProcessorFactory.get_document_processor()}
+        document_sources = {
+            "file": DocumentProcessorFactory.get_document_processor(),
+            "jira": JiraDocumentSource(vector_store_manager=vector_store)
+        }
         return DocumentService(repository, vector_store, document_sources)
 
     def conversation_service(self):

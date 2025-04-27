@@ -82,6 +82,9 @@ async def create_project(
         ValidationException: If project data is invalid
     """
     try:
+        # Ensure project ID is a string if provided
+        if project.id:
+            project.id = str(project.id)
         return await service.create_project(project)
     except ValidationException as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -22,6 +22,9 @@ class ProjectService:
         return project
 
     async def create_project(self, project: ProjectCreate) -> ProjectResponse:
+        # Ensure project ID is a string if provided
+        if project.id:
+            project.id = str(project.id)
         return await self.repository.create(project)
 
     async def update_project(self, project_id: UUID, project: ProjectUpdate) -> ProjectResponse:

@@ -1,7 +1,7 @@
 import os
 import pytest
 from openai import AzureOpenAI
-from app.config import settings
+from app.core.config import settings
 
 @pytest.fixture
 def client():

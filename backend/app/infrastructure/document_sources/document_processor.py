@@ -112,10 +112,11 @@ class DocumentProcessor:
         self,
         file: UploadFile,
         vector_store: VectorStoreManager,
+        db_session,
         conversation_id: Optional[str] = None,
         project_id: Optional[str] = None
-    ) -> Document:
-        """Process an uploaded document."""
+    ):
+        """Process an uploaded document and store it in both the vector store and backend DB."""
         # Validate file size
         content = await file.read()
         if len(content) > settings.MAX_DOCUMENT_SIZE_MB * 1024 * 1024:
@@ -123,21 +124,12 @@ class DocumentProcessor:
                 status_code=413,
                 detail=f"File size exceeds maximum limit of {settings.MAX_DOCUMENT_SIZE_MB}MB"
             )
-        
-        # Validate file type first
         file_extension = self._validate_file_type(file.filename)
-        
-        # Create a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as temp_file:
             try:
-                # Write content to temporary file
                 temp_file.write(content)
                 temp_file.flush()
-                
-                # Process the document
                 split_docs = self._process_file(temp_file.name)
-                
-                # Create document metadata
                 doc_id = str(uuid4())
                 metadata = {
                     "file_name": file.filename,
@@ -147,12 +139,9 @@ class DocumentProcessor:
                     "conversation_id": conversation_id,
                     "project_id": project_id
                 }
-                
-                # Add vectors to vector store with retry logic
                 max_retries = 3
-                retry_delay = 2  # seconds
+                retry_delay = 2
                 last_error = None
-                
                 for attempt in range(max_retries):
                     try:
                         vector_store.add_documents(
@@ -161,55 +150,36 @@ class DocumentProcessor:
                             project_id=project_id, 
                             conversation_id=conversation_id
                         )
-                        break  # Success, exit the loop
+                        break
                     except Exception as e:
                         last_error = e
                         logger.warning(f"Attempt {attempt+1}/{max_retries} to add documents to vector store failed: {str(e)}")
                         if attempt < max_retries - 1:
                             logger.info(f"Retrying in {retry_delay} seconds...")
                             time.sleep(retry_delay)
-                            retry_delay *= 2  # Exponential backoff
-                
+                            retry_delay *= 2
                 if last_error:
-                    # If all retries failed, create the document without vector store
                     logger.warning(f"All attempts to add documents to vector store failed. Creating document without vectors.")
                     logger.warning(f"Last error: {str(last_error)}")
-                
-                # Create document record
-                document = Document(
-                    id=doc_id,
+                # --- Store in backend DB ---
+                from app.infrastructure.repositories.document_repository import DocumentRepository
+                from app.domain.schemas.document import DocumentCreate
+                document_create = DocumentCreate(
                     title=file.filename,
+                    source_type="file",  # or set appropriately
+                    source_id=doc_id,
                     file_name=file.filename,
-                    file_type=metadata["file_type"],
+                    file_type=file_extension,
                     file_size=len(content),
                     content="\n".join([doc.page_content for doc in split_docs]),
                     doc_metadata=metadata,
                     project_id=project_id,
-                    conversation_id=conversation_id,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    conversation_id=conversation_id
                 )
-                
-                # Convert to Pydantic model for API response
-                from app.models.document import Document as PydanticDocument
-                pydantic_doc = PydanticDocument(
-                    id=doc_id,
-                    title=file.filename,
-                    file_name=file.filename,
-                    file_type=metadata["file_type"],
-                    file_size=len(content),
-                    content="\n".join([doc.page_content for doc in split_docs]),
-                    metadata=metadata,
-                    project_id=project_id,
-                    conversation_id=conversation_id,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                
-                return pydantic_doc
-                
+                repo = DocumentRepository(db_session)
+                db_document = await repo.create(document_create)
+                return db_document
             finally:
-                # Clean up the temporary file
                 os.unlink(temp_file.name)
 
 def get_document_content(document_id: str) -> List[LangchainDocument]:

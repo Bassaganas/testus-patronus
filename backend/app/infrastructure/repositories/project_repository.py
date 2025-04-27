@@ -65,7 +65,12 @@ class ProjectRepository:
         return ProjectResponse.model_validate(proj_dict)
 
     async def create(self, project: ProjectCreate) -> ProjectResponse:
-        db_project = Project(**project.model_dump())
+        # Convert project data to dict and ensure id is a string if provided
+        project_data = project.model_dump()
+        if project_data.get("id"):
+            project_data["id"] = str(project_data["id"])
+        
+        db_project = Project(**project_data)
         self.db.add(db_project)
         await self.db.commit()
         await self.db.refresh(db_project)

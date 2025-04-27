@@ -51,6 +51,15 @@ class DocumentRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
     
+    async def get_all_by_source(self, source_type: str, source_id: str) -> List[Document]:
+        """Get all documents by their source type and ID."""
+        query = select(Document).where(
+            Document.source_type == source_type,
+            Document.source_id == source_id
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+    
     async def create(self, document: DocumentCreate) -> Document:
         db_document = Document(
             title=document.title,

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import projects, conversations, documents, health
+from app.api.v1.endpoints import projects, conversations, documents, health, jira
 
 # Create the main v1 router
 router = APIRouter(prefix="/api/v1")
@@ -9,6 +9,7 @@ router.include_router(health.router)
 router.include_router(projects.router)
 router.include_router(conversations.router)
 router.include_router(documents.router)
+router.include_router(jira.router)
 
 # Root endpoint for API v1
 @router.get("/", tags=["Root"])

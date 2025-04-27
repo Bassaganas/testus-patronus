@@ -65,7 +65,8 @@ class TestVectorStoreManager:
         assert result is False
         mock_embeddings.embed_query.assert_called_once()
 
-    def test_add_documents(self, vector_store_manager, mock_chroma):
+    @pytest.mark.asyncio
+    async def test_add_documents(self, vector_store_manager, mock_chroma):
         """Test adding documents to vector store."""
         # Create test documents
         docs = [
@@ -77,7 +78,7 @@ class TestVectorStoreManager:
         conversation_id = "test_conv_id"
         
         # Call method
-        vector_store_manager.add_documents(docs, document_id, project_id, conversation_id)
+        await vector_store_manager.add_documents(docs, document_id, project_id, conversation_id)
         
         # Check that docs have been updated with metadata
         assert docs[0].metadata["document_id"] == document_id
@@ -90,7 +91,8 @@ class TestVectorStoreManager:
         # Check that add_documents was called on the vector store
         mock_chroma.add_documents.assert_called_once_with(docs)
 
-    def test_add_documents_error_retry(self, vector_store_manager, mock_chroma):
+    @pytest.mark.asyncio
+    async def test_add_documents_error_retry(self, vector_store_manager, mock_chroma):
         """Test retry logic when adding documents fails."""
         # Setup mock to fail once then succeed
         mock_chroma.add_documents.side_effect = [Exception("Test error"), None]
@@ -99,7 +101,7 @@ class TestVectorStoreManager:
         docs = [Document(page_content="Test content")]
         
         # Call method
-        vector_store_manager.add_documents(docs, "test_id")
+        await vector_store_manager.add_documents(docs, "test_id")
         
         # Check that add_documents was called twice (retry)
         assert mock_chroma.add_documents.call_count == 2
@@ -215,50 +217,44 @@ class TestVectorStoreManager:
         )
         mock_chroma.persist.assert_called_once()
 
-    def test_update_document(self, vector_store_manager, mock_chroma):
+    @pytest.mark.asyncio
+    async def test_update_document(self, vector_store_manager, mock_chroma):
         """Test updating document metadata."""
-        # Create mock document with updated metadata
+        # Setup mock document
         mock_document = Mock()
         mock_document.id = "doc1"
-        mock_document.project_id = "updated_proj"
-        mock_document.conversation_id = "updated_conv"
-        
-        # Mock get_document to return some chunks
-        doc_chunks = [
-            Document(page_content="Chunk 1", metadata={"document_id": "doc1"}),
-            Document(page_content="Chunk 2", metadata={"document_id": "doc1"}),
+        mock_document.metadata = {"key": "value"}
+        mock_document.chunks = [
+            Document(page_content="chunk1", metadata={}),
+            Document(page_content="chunk2", metadata={})
         ]
-        vector_store_manager.get_document = Mock(return_value=doc_chunks)
-        vector_store_manager.delete_document = Mock()
+        
+        # Mock add_documents method
         vector_store_manager.add_documents = Mock()
         
         # Call method
-        vector_store_manager.update_document(mock_document)
-        
-        # Check that document was updated properly
-        vector_store_manager.get_document.assert_called_once_with("doc1")
-        vector_store_manager.delete_document.assert_called_once_with("doc1")
+        await vector_store_manager.update_document(mock_document)
         
         # Check that add_documents was called with updated metadata
         call_args = vector_store_manager.add_documents.call_args[0]
-        updated_chunks = call_args[0]
-        assert len(updated_chunks) == 2
-        assert updated_chunks[0].metadata["project_id"] == "updated_proj"
-        assert updated_chunks[0].metadata["conversation_id"] == "updated_conv"
-        assert updated_chunks[1].metadata["project_id"] == "updated_proj"
-        assert updated_chunks[1].metadata["conversation_id"] == "updated_conv"
+        assert call_args[0] == mock_document.chunks
+        assert call_args[1] == mock_document.id
+        assert "key" in call_args[2].metadata
+        assert call_args[2].metadata["key"] == "value"
 
-    def test_update_document_no_chunks(self, vector_store_manager, mock_chroma):
-        """Test updating document with no chunks found."""
-        # Mock get_document to return no chunks
-        vector_store_manager.get_document = Mock(return_value=[])
-        vector_store_manager.delete_document = Mock()
+    @pytest.mark.asyncio
+    async def test_update_document_no_chunks(self, vector_store_manager, mock_chroma):
+        """Test updating document with no chunks."""
+        # Setup mock document with no chunks
+        mock_document = Mock()
+        mock_document.id = "doc1"
+        mock_document.chunks = []
+        
+        # Mock add_documents method
         vector_store_manager.add_documents = Mock()
         
         # Call method
-        vector_store_manager.update_document(Mock(id="doc1"))
+        await vector_store_manager.update_document(mock_document)
         
-        # Check that no additional calls were made
-        vector_store_manager.get_document.assert_called_once_with("doc1")
-        vector_store_manager.delete_document.assert_not_called()
+        # Check that add_documents was not called
         vector_store_manager.add_documents.assert_not_called() 

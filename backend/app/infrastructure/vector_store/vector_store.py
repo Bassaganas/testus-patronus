@@ -8,13 +8,21 @@ import logging
 from app.core.config import settings
 import time
 from pathlib import Path
+import re
+import asyncio
+import uuid
 
 # Get logger
 logger = logging.getLogger("testus-patronus")
 
 class VectorStoreManager:
-    def __init__(self):
-        """Initialize the vector store manager with Azure OpenAI embeddings."""
+    def __init__(self, vector_store_dir: Optional[str] = None):
+        """Initialize the vector store manager with Azure OpenAI embeddings.
+        
+        Args:
+            vector_store_dir: Optional custom path for the vector store. If not provided,
+                            uses the path from settings.VECTOR_STORE_DIR
+        """
         try:
             logger.info(f"Initializing embeddings with deployment: {settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT}")
             logger.info(f"Using API version: {settings.AZURE_OPENAI_API_VERSION}")
@@ -30,19 +38,33 @@ class VectorStoreManager:
                 openai_api_key=api_key,
                 openai_api_version=settings.AZURE_OPENAI_API_VERSION,
                 deployment=settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
-                chunk_size=16  # Optimize for Azure OpenAI
+                chunk_size=1000,  # Increased from 16 to 1000 for better batching
+                max_retries=3,  # Add retries for reliability
+                request_timeout=30  # Add timeout to prevent hanging
             )
             
             # Create vector store directory if it doesn't exist
-            self.vector_store_dir = Path(settings.VECTOR_STORE_DIR)
+            self.vector_store_dir = Path(vector_store_dir) if vector_store_dir else Path(settings.VECTOR_STORE_DIR)
             self.vector_store_dir.mkdir(parents=True, exist_ok=True)
             
-            # Initialize vector store with cosine similarity
-            self.vector_store = Chroma(
-                persist_directory=str(self.vector_store_dir),
-                embedding_function=self.embeddings,
-                collection_metadata={"hnsw:space": "cosine"}
-            )
+            # Try to initialize the persistent vector store
+            try:
+                logger.info(f"Initializing vector store with directory: {self.vector_store_dir}")
+                # Initialize vector store with cosine similarity
+                self.vector_store = Chroma(
+                    persist_directory=str(self.vector_store_dir),
+                    embedding_function=self.embeddings,
+                    collection_metadata={"hnsw:space": "cosine"}
+                )
+                logger.info("Persistent vector store initialized successfully")
+            except Exception as e:
+                logger.error(f"Error initializing persistent vector store: {str(e)}")
+                logger.info("Falling back to in-memory ChromaDB")
+                # Fallback to in-memory store if persistent store fails
+                self.vector_store = Chroma(
+                    embedding_function=self.embeddings,
+                    collection_metadata={"hnsw:space": "cosine"}
+                )
             
             logger.info("Vector store manager initialized successfully")
         except Exception as e:
@@ -64,98 +86,222 @@ class VectorStoreManager:
             logger.error(f"Health check failed: {str(e)}")
             return False
     
-    def add_documents(self, documents: List[Union[dict, LangchainDocument]], document_id: Optional[str] = None, 
+    async def add_documents(self, documents: List[Union[dict, LangchainDocument]], document_id: Optional[str] = None, 
                     project_id: Optional[str] = None, conversation_id: Optional[str] = None) -> None:
         """
         Add documents to the vector store.
         
         Args:
-            documents (List[Union[dict, LangchainDocument]]): List of documents to add
-            document_id (Optional[str]): ID of the document these chunks belong to
-            project_id (Optional[str]): Project ID to associate with the document
-            conversation_id (Optional[str]): Conversation ID to associate with the document
+            documents: List of documents to add (either dict or LangchainDocument)
+            document_id: Document ID from the database (UUID)
+            project_id: Optional project ID
+            conversation_id: Optional conversation ID
         """
         try:
             logger.info(f"Adding {len(documents)} documents to vector store")
-            if document_id:
-                logger.info(f"Document ID: {document_id}")
-            fixed_documents = []
+            logger.info(f"Current vector store directory: {self.vector_store_dir}")
+            
+            # First check if the vector store is initialized
+            if not hasattr(self, 'vector_store') or self.vector_store is None:
+                logger.error("Vector store is not initialized")
+                raise ValueError("Vector store is not initialized")
+            
+            # Convert documents to LangchainDocument format if needed
+            langchain_docs = []
             for doc in documents:
-                # Always ensure metadata is a dict and set project_id/conversation_id if available
-                if isinstance(doc, dict):
-                    metadata = doc.get('metadata', {})
-                    if document_id:
-                        metadata["document_id"] = document_id
-                    if project_id is not None:
-                        metadata["project_id"] = project_id
-                    if conversation_id is not None:
-                        metadata["conversation_id"] = conversation_id
-                    doc['metadata'] = metadata
-                    logger.info(f"Indexing document (dict) with metadata: {metadata}")
-                    fixed_documents.append(LangchainDocument(
-                        page_content=doc.get("page_content", ""),
-                        metadata=metadata
-                    ))
-                else:
-                    if not hasattr(doc, 'metadata') or doc.metadata is None:
-                        doc.metadata = {}
-                    if document_id:
-                        doc.metadata["document_id"] = document_id
-                    if project_id is not None:
-                        doc.metadata["project_id"] = project_id
-                    if conversation_id is not None:
-                        doc.metadata["conversation_id"] = conversation_id
-                    logger.info(f"Indexing document (object) with metadata: {doc.metadata}")
-                    fixed_documents.append(doc)
-            max_retries = 3
-            retry_delay = 2  # seconds
-            for attempt in range(max_retries):
                 try:
-                    self.vector_store.add_documents(fixed_documents)
-                    logger.info(f"Successfully added documents to vector store")
-                    return  # Success, exit the function
-                except Exception as e:
-                    logger.warning(f"Attempt {attempt+1}/{max_retries} failed: {str(e)}")
-                    if attempt < max_retries - 1:
-                        logger.info(f"Retrying in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                    if isinstance(doc, dict):
+                        # Ensure document_id is a string
+                        if 'document_id' in doc.get('metadata', {}):
+                            doc['metadata']['document_id'] = str(doc['metadata']['document_id'])
+                        
+                        langchain_doc = LangchainDocument(
+                            page_content=doc.get('page_content', ''),
+                            metadata=doc.get('metadata', {})
+                        )
                     else:
-                        logger.error(f"All {max_retries} attempts failed. Last error: {str(e)}")
-                        raise
+                        langchain_doc = doc
+                    
+                    # Ensure document_id is a string
+                    if 'document_id' in langchain_doc.metadata:
+                        langchain_doc.metadata['document_id'] = str(langchain_doc.metadata['document_id'])
+                    
+                    # Log document details for debugging
+                    logger.info(f"Adding document with ID: {langchain_doc.metadata.get('document_id')}")
+                    logger.info(f"Document content preview: {langchain_doc.page_content[:200]}...")
+                    logger.info(f"Document metadata: {langchain_doc.metadata}")
+                    
+                    langchain_docs.append(langchain_doc)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing document: {str(e)}")
+                    continue
+                
+            if not langchain_docs:
+                logger.error("No valid documents to add to vector store")
+                raise ValueError("No valid documents to add")
+            
+            # Add documents to vector store
+            try:
+                # Log state before adding documents
+                try:
+                    pre_count = len(self.vector_store.get()['documents'])
+                    logger.info(f"Vector store has {pre_count} documents before adding new documents")
+                except Exception as e:
+                    logger.error(f"Error checking vector store document count before addition: {str(e)}")
+                    pre_count = 0
+                
+                # Run the add_documents operation in a thread pool since it's CPU-bound
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.vector_store.add_documents, langchain_docs)
+                
+                # Explicitly persist the vector store to ensure data is saved
+                try:
+                    # Call persist() on the vector store itself
+                    await loop.run_in_executor(None, self.vector_store.persist)
+                    logger.info("Explicitly persisted vector store after adding documents")
+                except Exception as e:
+                    logger.error(f"Error persisting vector store: {str(e)}")
+                
+                logger.info(f"Successfully added {len(langchain_docs)} documents to vector store")
+                
+                # Verify documents were added
+                for doc in langchain_docs:
+                    doc_id = doc.metadata.get('document_id')
+                    if doc_id:
+                        try:
+                            results = await loop.run_in_executor(
+                                None,
+                                lambda: self.vector_store.get(
+                                    where={"document_id": doc_id},
+                                    include=["documents", "metadatas"]
+                                )
+                            )
+                            if not results.get('documents'):
+                                logger.error(f"Document {doc_id} was not found in vector store after addition")
+                            else:
+                                logger.info(f"Successfully verified document {doc_id} was added with {len(results.get('documents', []))} chunks")
+                        except Exception as e:
+                            logger.error(f"Error verifying document {doc_id} addition: {str(e)}")
+                            
+            except Exception as e:
+                logger.error(f"Error adding documents to vector store: {str(e)}")
+                raise ValueError(f"Failed to add documents to vector store: {str(e)}")
+            
         except Exception as e:
-            logger.error(f"Error adding documents to vector store: {str(e)}")
+            logger.error(f"Error in add_documents: {str(e)}")
             raise
     
     def reset(self) -> None:
         """Reset the vector store by deleting all documents."""
         try:
             logger.info("Resetting vector store")
-            if os.path.exists(settings.VECTOR_STORE_DIR):
-                shutil.rmtree(settings.VECTOR_STORE_DIR)
-                logger.info(f"Deleted vector store directory: {settings.VECTOR_STORE_DIR}")
             
-            os.makedirs(settings.VECTOR_STORE_DIR, exist_ok=True)
-            logger.info(f"Created new vector store directory: {settings.VECTOR_STORE_DIR}")
+            # Instead of deleting the directory, we'll either:
+            # 1. Delete the collection (if supported)
+            # 2. Or delete the contents while preserving the directory
             
-            # Reinitialize the vector store with better configuration
-            self.vector_store = Chroma(
-                persist_directory=str(self.vector_store_dir),
-                embedding_function=self.embeddings,
-                collection_metadata={"hnsw:space": "cosine"}
-            )
-            logger.info("Vector store reset successful")
+            try:
+                # Try to delete just the collection first (preferred approach)
+                logger.info("Attempting to delete collection")
+                self.vector_store.delete_collection()
+                logger.info("Successfully deleted collection")
+            except Exception as e:
+                logger.error(f"Error deleting collection: {str(e)}")
+                
+                # Fall back to removing directory contents but preserve the path
+                if os.path.exists(settings.VECTOR_STORE_DIR):
+                    try:
+                        # Remove contents but keep directory structure
+                        shutil.rmtree(settings.VECTOR_STORE_DIR)
+                        logger.info(f"Deleted vector store directory contents: {settings.VECTOR_STORE_DIR}")
+                        # Recreate the same directory
+                        os.makedirs(settings.VECTOR_STORE_DIR, exist_ok=True)
+                    except Exception as e:
+                        logger.error(f"Error resetting vector store directory: {str(e)}")
+            
+            # Maintain the same vector store directory path (don't create timestamped dirs)
+            self.vector_store_dir = Path(settings.VECTOR_STORE_DIR)
+            
+            # Reinitialize the vector store with the same directory
+            try:
+                # Initialize vector store with cosine similarity
+                self.vector_store = Chroma(
+                    persist_directory=str(self.vector_store_dir),
+                    embedding_function=self.embeddings,
+                    collection_metadata={"hnsw:space": "cosine"}
+                )
+                
+                # Explicitly persist to ensure the collection is saved
+                try:
+                    self.vector_store.persist()
+                    logger.info("Explicitly persisted vector store after reset")
+                except Exception as e:
+                    logger.error(f"Error persisting vector store after reset: {str(e)}")
+                
+                logger.info("Vector store reset successful")
+            except Exception as e:
+                logger.error(f"Error reinitializing vector store: {str(e)}")
+                # Create an in-memory store as fallback
+                logger.info("Falling back to in-memory ChromaDB")
+                self.vector_store = Chroma(
+                    embedding_function=self.embeddings,
+                    collection_metadata={"hnsw:space": "cosine"}
+                )
         except Exception as e:
             logger.error(f"Error resetting vector store: {str(e)}")
             raise
     
+    def search_by_jira_key(self, jira_key: str) -> List[LangchainDocument]:
+        """
+        Search for documents by Jira issue key.
+        
+        Args:
+            jira_key: The Jira issue key (e.g., 'PROJ-123')
+            
+        Returns:
+            List of Document objects
+        """
+        try:
+            logger.info(f"Searching for Jira issue with key: {jira_key}")
+            
+            # First try exact match in metadata
+            results = self.vector_store.get(
+                where={"issue_key": jira_key},
+                include=["documents", "metadatas"]
+            )
+            
+            if results and results.get("documents"):
+                # Convert results to Document objects
+                documents = []
+                for doc, metadata in zip(
+                    results["documents"],
+                    results["metadatas"]
+                ):
+                    if not metadata:
+                        metadata = {}
+                    documents.append(LangchainDocument(page_content=doc, metadata=metadata))
+                return documents
+            
+            # If no exact match, try semantic search with the key
+            return self.similarity_search(
+                query=f"Find the Jira issue with key {jira_key}",
+                k=1,
+                score_threshold=0.7
+            )
+            
+        except Exception as e:
+            logger.error(f"Error searching by Jira key: {str(e)}")
+            return []
+
     def similarity_search(
         self, 
         query: str, 
         k: int = 4, 
         conversation_id: Optional[str] = None,
         project_id: Optional[str] = None,
-        score_threshold: float = 0.0  # Lowered from 0.7 to be less strict
+        score_threshold: float = 0.0,  # Lowered from 0.7 to be less strict
+        metadata_filters: Optional[Dict[str, Any]] = None
     ) -> List[LangchainDocument]:
         """
         Perform a similarity search on the vector store.
@@ -166,6 +312,7 @@ class VectorStoreManager:
             conversation_id: Limit results to a specific conversation
             project_id: Limit results to a specific project
             score_threshold: Minimum similarity score threshold (applied post-query)
+            metadata_filters: Additional metadata filters to apply
             
         Returns:
             List of Document objects
@@ -177,6 +324,16 @@ class VectorStoreManager:
             
             logger.info(f"Querying with conversation_id: {conv_id_str} (type: {type(conv_id_str)})")
             logger.info(f"Querying with project_id: {proj_id_str} (type: {type(proj_id_str)})")
+            
+            # Check if query contains a Jira key pattern (e.g., PROJ-123)
+            jira_key_match = re.search(r'[A-Z]+-\d+', query)
+            if jira_key_match:
+                jira_key = jira_key_match.group()
+                logger.info(f"Detected Jira key in query: {jira_key}")
+                # Try to find the specific issue first
+                key_results = self.search_by_jira_key(jira_key)
+                if key_results:
+                    return key_results
             
             # First, try a search with no filters at all, to see if the vector store has any documents
             try:
@@ -200,65 +357,36 @@ class VectorStoreManager:
             conv_id_str = conv_id_str if conv_id_str and conv_id_str.strip() else None
             proj_id_str = proj_id_str if proj_id_str and proj_id_str.strip() else None
             
-            if conv_id_str and proj_id_str:
-                filter_dict = {
-                    "$and": [
-                        {"conversation_id": conv_id_str},
-                        {"project_id": proj_id_str}
-                    ]
-                }
-                logger.info(f"STEP 1: Filter dict used in similarity_search: {filter_dict}")
-                results = self._execute_search(query, k, filter_dict, score_threshold)
-                if results:
-                    return results
-                logger.info(f"No results with combined filters, trying just conversation_id: {conv_id_str}")
-                filter_dict = {"conversation_id": conv_id_str}
-                logger.info(f"STEP 2: Filter dict used in similarity_search: {filter_dict}")
-                results = self._execute_search(query, k, filter_dict, score_threshold)
-                if results:
-                    return results
-                logger.info(f"No results with conversation_id, trying just project_id: {proj_id_str}")
-                filter_dict = {"project_id": proj_id_str}
-                logger.info(f"STEP 3: Filter dict used in similarity_search: {filter_dict}")
-                results = self._execute_search(query, k, filter_dict, score_threshold)
-                if results:
-                    return results
-                logger.info("No results with any filters, trying without filters")
+            # Build filter dictionary
+            filter_conditions = []
+            
+            if conv_id_str:
+                filter_conditions.append({"conversation_id": conv_id_str})
+            if proj_id_str:
+                filter_conditions.append({"project_id": proj_id_str})
+            if metadata_filters:
+                filter_conditions.append(metadata_filters)
+            
+            if filter_conditions:
+                if len(filter_conditions) == 1:
+                    filter_dict = filter_conditions[0]
+                else:
+                    filter_dict = {"$and": filter_conditions}
+            
+            logger.info(f"Using filter dict: {filter_dict}")
+            results = self._execute_search(query, k, filter_dict, score_threshold)
+            
+            if not results and filter_dict:
+                # If no results with filters, try without them
+                logger.info("No results with filters, trying without filters")
                 results = self._execute_search(query, k, None, 0.0)
-                logger.info(f"STEP 4: Results with no filter: {len(results)} documents")
-                return results
-            elif conv_id_str:
-                filter_dict = {"conversation_id": conv_id_str}
-                logger.info(f"Filtering search by conversation_id: {conv_id_str}")
-                logger.info(f"STEP 5: Filter dict used in similarity_search: {filter_dict}")
-                results = self._execute_search(query, k, filter_dict, score_threshold)
-                if results:
-                    return results
-                logger.info("No results with conversation_id filter, trying without filters")
-                results = self._execute_search(query, k, None, 0.0)
-                logger.info(f"STEP 6: Results with no filter: {len(results)} documents")
-                return results
-            elif proj_id_str:
-                filter_dict = {"project_id": proj_id_str}
-                logger.info(f"Filtering search by project_id: {proj_id_str}")
-                logger.info(f"STEP 7: Filter dict used in similarity_search: {filter_dict}")
-                results = self._execute_search(query, k, filter_dict, score_threshold)
-                if results:
-                    return results
-                logger.info("No results with project_id filter, trying without filters")
-                results = self._execute_search(query, k, None, 0.0)
-                logger.info(f"STEP 8: Results with no filter: {len(results)} documents")
-                return results
-            else:
-                logger.info("No filters provided, searching all documents")
-                results = self._execute_search(query, k, None, score_threshold)
-                logger.info(f"STEP 9: Results with no filter: {len(results)} documents")
-                return results
+            
+            return results
+            
         except Exception as e:
             logger.error(f"Error in similarity search: {str(e)}")
-            logger.warning("Returning empty results due to search error")
             return []
-            
+    
     def _execute_search(self, query: str, k: int, filter_dict: Optional[Dict] = None, score_threshold: float = 0.5) -> List[LangchainDocument]:
         """
         Helper method to execute a search with the given parameters and filter results by score.
@@ -315,32 +443,77 @@ class VectorStoreManager:
         Retrieve all chunks for a specific document.
         
         Args:
-            document_id: ID of the document to retrieve
+            document_id: UUID of the document to retrieve
             
         Returns:
             List of Document objects
         """
         try:
             logger.info(f"Retrieving document chunks for document_id: {document_id}")
-            results = self.vector_store.get(
-                where={"document_id": document_id},
-                include=["documents", "metadatas", "distances"]
-            )
             
-            # Convert results to Document objects with scores
+            # First check if the vector store is initialized
+            if not hasattr(self, 'vector_store') or self.vector_store is None:
+                logger.error("Vector store is not initialized")
+                raise ValueError("Vector store is not initialized")
+            
+            # Ensure document_id is a string
+            document_id = str(document_id)
+            logger.info(f"Using document_id (type: {type(document_id)}): {document_id}")
+            
+            # First try to get all documents to verify the vector store has data
+            try:
+                all_docs = self.vector_store.get()
+                logger.info(f"Vector store contains {len(all_docs.get('documents', []))} total documents")
+            except Exception as e:
+                logger.error(f"Error checking vector store contents: {str(e)}")
+                raise ValueError(f"Vector store may be empty or corrupted: {str(e)}")
+            
+            # Get the document by UUID or project_id
+            try:
+                # Try to get by project_id first
+                results = self.vector_store.get(
+                    where={"project_id": document_id},
+                    include=["documents", "metadatas"]
+                )
+                
+                # If no results, try by document_id
+                if not results.get('documents'):
+                    results = self.vector_store.get(
+                        where={"document_id": document_id},
+                        include=["documents", "metadatas"]
+                    )
+            except Exception as e:
+                logger.error(f"Error retrieving document from vector store: {str(e)}")
+                raise ValueError(f"Failed to retrieve document from vector store: {str(e)}")
+            
+            # Log the raw results for debugging
+            logger.info(f"Raw results from vector store: {len(results.get('documents', []))} documents found")
+            
+            # Convert results to Document objects
             documents = []
-            for doc, metadata, distance in zip(
+            for i, (doc, metadata) in enumerate(zip(
                 results["documents"],
-                results["metadatas"],
-                results["distances"]
-            ):
+                results["metadatas"]
+            )):
                 if not metadata:
                     metadata = {}
-                metadata["score"] = 1 - distance  # Convert distance to similarity score
                 documents.append(LangchainDocument(page_content=doc, metadata=metadata))
+                
+                # Log detailed information about each document chunk
+                logger.info(f"Document chunk {i+1}/{len(results['documents'])} metadata: {metadata}")
+                
+                # Log a preview of the content (first 200 chars)
+                content_preview = doc[:200] + "..." if len(doc) > 200 else doc
+                logger.info(f"Document chunk {i+1}/{len(results['documents'])} content preview: {content_preview}")
+                
+                # For Jira documents, log specific fields if available
+                if metadata.get("source_type") == "jira":
+                    logger.info(f"Jira document chunk {i+1}/{len(results['documents'])} - Key: {metadata.get('issue_key')}, "
+                               f"Type: {metadata.get('issue_type')}, Status: {metadata.get('status')}")
             
             logger.info(f"Retrieved {len(documents)} chunks for document {document_id}")
             return documents
+            
         except Exception as e:
             logger.error(f"Error retrieving document chunks: {str(e)}")
             raise
@@ -357,7 +530,6 @@ class VectorStoreManager:
             self.vector_store.delete(
                 where={"document_id": document_id}
             )
-            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for document {document_id}")
         except Exception as e:
             logger.error(f"Error deleting document chunks: {str(e)}")
@@ -376,7 +548,6 @@ class VectorStoreManager:
             self.vector_store.delete(
                 where={"conversation_id": conversation_id}
             )
-            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for conversation {conversation_id}")
         except Exception as e:
             logger.error(f"Error deleting conversation documents: {str(e)}")
@@ -395,7 +566,6 @@ class VectorStoreManager:
             self.vector_store.delete(
                 where={"project_id": project_id}
             )
-            self.vector_store.persist()  # Ensure changes are persisted
             logger.info(f"Successfully deleted chunks for project {project_id}")
         except Exception as e:
             logger.error(f"Error deleting project documents from vector store: {str(e)}")
@@ -409,64 +579,95 @@ class VectorStoreManager:
         try:
             logger.info("Deleting entire vector store collection")
             self.vector_store.delete_collection()
-            self.vector_store.persist()  # Ensure changes are persisted
             logger.info("Collection deleted successfully")
         except Exception as e:
             logger.error(f"Error deleting collection: {str(e)}")
             raise
     
-    def update_document(self, document) -> None:
+    async def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]) -> None:
         """
-        Update document metadata in vector store.
+        Update metadata for a document in the vector store.
         
         Args:
-            document: The document with updated metadata
+            document_id: Document ID to update
+            metadata: New metadata to set
         """
         try:
-            logger.info(f"Updating document metadata in vector store for document_id: {document.id}")
-            
-            # First, retrieve all chunks for this document
-            document_chunks = self.get_document(document.id)
-            
-            if not document_chunks:
-                logger.warning(f"No chunks found for document {document.id} in vector store. Skipping update.")
-                return
-                
-            # Delete existing chunks
-            self.delete_document(document.id)
-            
-            # Extract project_id and conversation_id from document
-            project_id = document.project_id
-            conversation_id = document.conversation_id
-            
-            # Create new Langchain documents with updated metadata
-            updated_chunks = []
-            for chunk in document_chunks:
-                # Create a new metadata dictionary with updated values
-                metadata = chunk.metadata.copy() if chunk.metadata else {}
-                if project_id:
-                    metadata["project_id"] = project_id
-                if conversation_id:
-                    metadata["conversation_id"] = conversation_id
-                
-                # Create a new document with the updated metadata
-                updated_chunk = LangchainDocument(
-                    page_content=chunk.page_content,
-                    metadata=metadata
+            # Get existing document
+            results = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.vector_store.get(
+                    where={"document_id": document_id},
+                    include=["documents", "metadatas"]
                 )
-                updated_chunks.append(updated_chunk)
-            
-            # Re-add the chunks with updated metadata
-            self.add_documents(
-                updated_chunks, 
-                document_id=document.id,
-                project_id=project_id,
-                conversation_id=conversation_id
             )
             
-            logger.info(f"Successfully updated metadata for {len(updated_chunks)} chunks in document {document.id}")
+            if not results.get('documents'):
+                raise ValueError(f"Document {document_id} not found in vector store")
+            
+            # Update metadata for each chunk
+            updated_chunks = []
+            for doc, meta in zip(results['documents'], results['metadatas']):
+                updated_meta = meta.copy()
+                updated_meta.update(metadata)
+                updated_chunks.append(LangchainDocument(
+                    page_content=doc,
+                    metadata=updated_meta
+                ))
+            
+            # Re-add the chunks with updated metadata
+            await self.add_documents(
+                updated_chunks, 
+                document_id=document_id,
+                project_id=metadata.get('project_id'),
+                conversation_id=metadata.get('conversation_id')
+            )
             
         except Exception as e:
-            logger.error(f"Error updating document metadata in vector store: {str(e)}")
-            # Don't raise, as this should not block the main update operation
-            logger.warning("Document updated in database but vector store update failed") 
+            logger.error(f"Error updating document metadata: {str(e)}")
+            raise
+
+    async def update_document(self, document) -> None:
+        """
+        Update a document in the vector store.
+        
+        Args:
+            document: Document to update
+        """
+        try:
+            # Get existing document
+            results = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.vector_store.get(
+                    where={"document_id": str(document.id)},
+                    include=["documents", "metadatas"]
+                )
+            )
+            
+            if not results.get('documents'):
+                raise ValueError(f"Document {document.id} not found in vector store")
+            
+            # Update metadata for each chunk
+            updated_chunks = []
+            for doc, meta in zip(results['documents'], results['metadatas']):
+                updated_meta = meta.copy()
+                updated_meta.update({
+                    "project_id": str(document.project_id) if document.project_id else None,
+                    "conversation_id": str(document.conversation_id) if document.conversation_id else None
+                })
+                updated_chunks.append(LangchainDocument(
+                    page_content=doc,
+                    metadata=updated_meta
+                ))
+            
+            # Re-add the chunks with updated metadata
+            await self.add_documents(
+                updated_chunks, 
+                document_id=str(document.id),
+                project_id=str(document.project_id) if document.project_id else None,
+                conversation_id=str(document.conversation_id) if document.conversation_id else None
+            )
+            
+        except Exception as e:
+            logger.error(f"Error updating document: {str(e)}")
+            raise 

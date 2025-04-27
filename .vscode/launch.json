@@ -128,6 +128,81 @@
             "sourceMapPathOverrides": {
                 "webpack:///src/*": "${webRoot}/src/*"
             }
+        },
+        {
+            "name": "Python: Debug Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/test_jira_and_vector_api.py",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "purpose": [
+                "debug-test"
+            ],
+            "presentation": {
+                "hidden": false,
+                "group": "Backend",
+                "order": 3
+            }
+        },
+        {
+            "name": "Python: Debug Integration Tests RAG Queries",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/test_rag_queries.py",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "purpose": [
+                "debug-test"
+            ],
+            "presentation": {
+                "hidden": false,
+                "group": "Backend",
+                "order": 3
+            }
+        },
+        {
+            "name": "Python: Debug Integration Tests Conversation API",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/test_conversation_api.py",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "purpose": [
+                "debug-test"
+            ],
+            "presentation": {
+                "hidden": false,
+                "group": "Backend",
+                "order": 3
+            }
         }
     ],
     "compounds": [

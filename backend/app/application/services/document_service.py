@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 from fastapi import UploadFile
+import json
 
 from app.domain.schemas.document import DocumentCreate, DocumentUpdate, DocumentResponse
 from app.infrastructure.repositories.document_repository import DocumentRepository
@@ -88,29 +89,58 @@ class DocumentService:
         
         # Add to vector store
         if document.content:
-            # Merge all metadata for the vector store
-            vector_metadata = dict(document_data.metadata) if document_data.metadata else {}
-            
             # Convert all IDs to strings to ensure consistency
             document_id_str = str(document.id)
             project_id_str = str(project_id) if project_id else None
             conversation_id_str = str(conversation_id) if conversation_id else None
             
-            vector_metadata["document_id"] = document_id_str
-            if project_id_str:
-                vector_metadata["project_id"] = project_id_str
-            if conversation_id_str:
-                vector_metadata["conversation_id"] = conversation_id_str
+            # If we have content parts with metadata, add them individually
+            if hasattr(document_data, 'content_parts') and document_data.content_parts:
+                documents_to_add = []
+                for part in document_data.content_parts:
+                    # Merge metadata
+                    metadata = dict(part.get('metadata', {}))
+                    metadata.update({
+                        "document_id": document_id_str,
+                        "source_type": "file",
+                        "file_name": file.filename
+                    })
+                    if project_id_str:
+                        metadata["project_id"] = project_id_str
+                    if conversation_id_str:
+                        metadata["conversation_id"] = conversation_id_str
+                    
+                    documents_to_add.append({
+                        "page_content": part['page_content'],
+                        "metadata": metadata
+                    })
                 
-            print(f"Adding document to vector store with metadata: {vector_metadata}")
-            
-            # Add document to vector store
-            self.vector_store.add_documents(
-                [{"page_content": document.content, "metadata": vector_metadata}],
-                document_id=document_id_str,
-                project_id=project_id_str,
-                conversation_id=conversation_id_str
-            )
+                # Add all parts to vector store
+                await self.vector_store.add_documents(
+                    documents_to_add,
+                    document_id=document_id_str,
+                    project_id=project_id_str,
+                    conversation_id=conversation_id_str
+                )
+            else:
+                # Fallback to adding the whole document
+                vector_metadata = dict(document_data.metadata) if document_data.metadata else {}
+                vector_metadata.update({
+                    "document_id": document_id_str,
+                    "source_type": "file",
+                    "file_name": file.filename
+                })
+                if project_id_str:
+                    vector_metadata["project_id"] = project_id_str
+                if conversation_id_str:
+                    vector_metadata["conversation_id"] = conversation_id_str
+                
+                await self.vector_store.add_documents(
+                    [{"page_content": document.content, "metadata": vector_metadata}],
+                    document_id=document_id_str,
+                    project_id=project_id_str,
+                    conversation_id=conversation_id_str
+                )
             
             # Verify document was added to vector store
             try:
@@ -129,18 +159,53 @@ class DocumentService:
         conversation_id: Optional[str] = None
     ) -> DocumentResponse:
         """
-        Import a document from an external source
+        Import a document from a source system
         """
         # Get the appropriate document source
-        source_processor = self.document_sources.get(source_type)
-        if not source_processor:
-            raise ValidationException(f"Document source type '{source_type}' not available")
-            
-        # Process the document
-        document_data = await source_processor.process_document(source_id)
+        source = self.document_sources.get(source_type)
+        if not source:
+            raise ValidationException(f"Document source '{source_type}' not available")
         
-        # Create document
-        document_create = DocumentCreate(
+        # Process the document
+        document_data = await source.process_document(source_id)
+        
+        # For Jira imports, we need to create individual documents for each issue
+        if source_type == "jira":
+            # Create a summary document first
+            summary_document = await self.repository.create(DocumentCreate(
+                title=document_data.title,
+                source_type=source_type,
+                source_id=source_id,
+                content=document_data.content,
+                doc_metadata=document_data.metadata,
+                project_id=project_id,
+                conversation_id=conversation_id
+            ))
+            
+            # Get the Jira processor to process individual issues
+            jira_processor = source.processor
+            
+            # Parse the Jira data if it's a string
+            jira_data = document_data.content
+            if isinstance(jira_data, str):
+                try:
+                    jira_data = json.loads(jira_data)
+                except json.JSONDecodeError:
+                    raise ValidationException("Invalid JSON data in Jira content")
+            
+            # Process the Jira data using the processor
+            # This will handle creating individual documents for each issue
+            await jira_processor.process_jira_data(
+                data=jira_data,
+                file_name=document_data.metadata.get('file_name', ''),
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            
+            return summary_document
+        
+        # For other document types, proceed as before
+        document = await self.repository.create(DocumentCreate(
             title=document_data.title,
             source_type=source_type,
             source_id=source_id,
@@ -148,34 +213,20 @@ class DocumentService:
             doc_metadata=document_data.metadata,
             project_id=project_id,
             conversation_id=conversation_id
-        )
-        
-        # Save to database
-        document = await self.repository.create(document_create)
-        
-        # If conversation_id is provided, associate the document with the conversation
-        if conversation_id:
-            from app.infrastructure.repositories.conversation_repository import ConversationRepository
-            conversation_repo = ConversationRepository(self.repository.db)
-            try:
-                await conversation_repo.add_document(conversation_id, document.id)
-            except Exception as e:
-                print(f"Error associating document with conversation: {e}")
+        ))
         
         # Add to vector store
         if document.content:
-            # Create metadata for vector store
-            vector_metadata = {"document_id": str(document.id)}
-            if project_id:
-                vector_metadata["project_id"] = str(project_id)
-            if conversation_id:
-                vector_metadata["conversation_id"] = str(conversation_id)
-                
-            self.vector_store.add_documents(
-                [{"page_content": document.content, "metadata": vector_metadata}],
-                document_id=str(document.id),
-                project_id=str(project_id) if project_id else None,
-                conversation_id=str(conversation_id) if conversation_id else None
+            # Convert all IDs to strings to ensure consistency
+            document_id_str = str(document.id)
+            project_id_str = str(project_id) if project_id else None
+            conversation_id_str = str(conversation_id) if conversation_id else None
+            
+            await self.vector_store.add_documents(
+                [{"page_content": document.content, "metadata": document.doc_metadata}],
+                document_id=document_id_str,
+                project_id=project_id_str,
+                conversation_id=conversation_id_str
             )
         
         return document
@@ -218,7 +269,7 @@ class DocumentService:
             if updated_document.conversation_id:
                 vector_metadata["conversation_id"] = str(updated_document.conversation_id)
                 
-            self.vector_store.add_documents(
+            await self.vector_store.add_documents(
                 [{"page_content": updated_document.content, "metadata": vector_metadata}],
                 document_id=str(updated_document.id),
                 project_id=str(updated_document.project_id) if updated_document.project_id else None,
