@@ -252,192 +252,82 @@ class VectorStoreManager:
             logger.error(f"Error resetting vector store: {str(e)}")
             raise
     
-    def search_by_jira_key(self, jira_key: str) -> List[LangchainDocument]:
-        """
-        Search for documents by Jira issue key.
-        
-        Args:
-            jira_key: The Jira issue key (e.g., 'PROJ-123')
-            
-        Returns:
-            List of Document objects
-        """
+    async def search_by_jira_key(self, jira_key: str) -> List[LangchainDocument]:
         try:
             logger.info(f"Searching for Jira issue with key: {jira_key}")
             
-            # First try exact match in metadata
             results = self.vector_store.get(
                 where={"issue_key": jira_key},
                 include=["documents", "metadatas"]
             )
-            
+
             if results and results.get("documents"):
-                # Convert results to Document objects
-                documents = []
-                for doc, metadata in zip(
-                    results["documents"],
-                    results["metadatas"]
-                ):
-                    if not metadata:
-                        metadata = {}
-                    documents.append(LangchainDocument(page_content=doc, metadata=metadata))
+                documents = [
+                    LangchainDocument(page_content=doc, metadata=metadata or {})
+                    for doc, metadata in zip(results["documents"], results["metadatas"])
+                ]
                 return documents
-            
-            # If no exact match, try semantic search with the key
-            return self.similarity_search(
+
+            return await self.similarity_search(
                 query=f"Find the Jira issue with key {jira_key}",
                 k=1,
                 score_threshold=0.7
             )
-            
+
         except Exception as e:
             logger.error(f"Error searching by Jira key: {str(e)}")
             return []
 
-    def similarity_search(
-        self, 
-        query: str, 
-        k: int = 4, 
-        conversation_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        score_threshold: float = 0.0,  # Lowered from 0.7 to be less strict
-        metadata_filters: Optional[Dict[str, Any]] = None
+
+    async def similarity_search(
+        self,
+        query: str,
+        project_id: str,
+        score_threshold: Optional[float] = None,
+        k: int = 10  # Default to RAGChain.DEFAULT_K
     ) -> List[LangchainDocument]:
         """
-        Perform a similarity search on the vector store.
+        Perform a similarity search in the vector store.
         
         Args:
-            query: The search query
-            k: Number of results to return
-            conversation_id: Limit results to a specific conversation
-            project_id: Limit results to a specific project
-            score_threshold: Minimum similarity score threshold (applied post-query)
-            metadata_filters: Additional metadata filters to apply
+            query: The query text
+            document_ids: Optional list of document IDs or Document objects to search through
+            score_threshold: Optional minimum similarity score threshold (0.0 to 1.0)
+            k: Number of documents to retrieve (default: 4)
             
         Returns:
-            List of Document objects
+            List[Document]: List of relevant documents
         """
         try:
-            # Always convert IDs to strings
-            conv_id_str = str(conversation_id) if conversation_id is not None else None
-            proj_id_str = str(project_id) if project_id is not None else None
             
-            logger.info(f"Querying with conversation_id: {conv_id_str} (type: {type(conv_id_str)})")
-            logger.info(f"Querying with project_id: {proj_id_str} (type: {type(proj_id_str)})")
-            
-            # Check if query contains a Jira key pattern (e.g., PROJ-123)
-            jira_key_match = re.search(r'[A-Z]+-\d+', query)
-            if jira_key_match:
-                jira_key = jira_key_match.group()
-                logger.info(f"Detected Jira key in query: {jira_key}")
-                # Try to find the specific issue first
-                key_results = self.search_by_jira_key(jira_key)
-                if key_results:
-                    return key_results
-            
-            # First, try a search with no filters at all, to see if the vector store has any documents
-            try:
-                logger.info("STEP 0: Trying search with no filters to check if vector store has any documents")
-                no_filter_results = self._execute_search(query, k=k, filter_dict=None, score_threshold=0.0)
-                if no_filter_results:
-                    # Log the metadata of all documents in the vector store to debug
-                    logger.info(f"Vector store has {len(no_filter_results)} documents total")
-                    for i, doc in enumerate(no_filter_results[:5]):  # Show first 5 only
-                        logger.info(f"Document {i} metadata: {doc.metadata}")
-                else:
-                    logger.warning("Vector store appears to be empty - no documents returned with no filter")
-            except Exception as e:
-                logger.error(f"Error in no-filter check: {str(e)}")
-            
-            # Now proceed with the actual filtered search
-            results = []
-            filter_dict = None
-            
-            # Skip empty string IDs
-            conv_id_str = conv_id_str if conv_id_str and conv_id_str.strip() else None
-            proj_id_str = proj_id_str if proj_id_str and proj_id_str.strip() else None
-            
-            # Build filter dictionary
-            filter_conditions = []
-            
-            if conv_id_str:
-                filter_conditions.append({"conversation_id": conv_id_str})
-            if proj_id_str:
-                filter_conditions.append({"project_id": proj_id_str})
-            if metadata_filters:
-                filter_conditions.append(metadata_filters)
-            
-            if filter_conditions:
-                if len(filter_conditions) == 1:
-                    filter_dict = filter_conditions[0]
-                else:
-                    filter_dict = {"$and": filter_conditions}
-            
-            logger.info(f"Using filter dict: {filter_dict}")
-            results = self._execute_search(query, k, filter_dict, score_threshold)
-            
-            if not results and filter_dict:
-                # If no results with filters, try without them
-                logger.info("No results with filters, trying without filters")
-                results = self._execute_search(query, k, None, 0.0)
-            
-            return results
-            
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None,
+                lambda: self.vector_store.similarity_search_with_score(
+                    query,  # ❗ RAW TEXT
+                    k=k,
+                    filter={"project_id": project_id}
+                )
+            )
+
+            if not results:
+                logger.warning(f"No documents found in similarity search for query: {query}")
+                return []
+
+            if score_threshold is not None:
+                original_len = len(results)
+                results = [(doc, score) for doc, score in results if score >= score_threshold]
+                if not results:
+                    logger.info(f"Filtered out {original_len} results below score threshold {score_threshold}")
+                    return []
+
+            logger.info(f"Returning {len(results)} documents above threshold for query: {query}")
+            return [doc for doc, _ in results]
+
         except Exception as e:
             logger.error(f"Error in similarity search: {str(e)}")
             return []
-    
-    def _execute_search(self, query: str, k: int, filter_dict: Optional[Dict] = None, score_threshold: float = 0.5) -> List[LangchainDocument]:
-        """
-        Helper method to execute a search with the given parameters and filter results by score.
         
-        Args:
-            query: The search query
-            k: Number of results to return
-            filter_dict: Filter dictionary for the search
-            score_threshold: Minimum similarity score threshold
-            
-        Returns:
-            List of filtered Document objects
-        """
-        try:
-            logger.info(f"Performing similarity search with query: '{query[:50]}...' (k={k})")
-            search_kwargs = {"k": k}
-            if filter_dict:
-                search_kwargs["filter"] = filter_dict
-                logger.info(f"Using filter: {filter_dict}")
-            
-            try:
-                results = self.vector_store.similarity_search_with_score(query, **search_kwargs)
-                # Log all results before filtering
-                for doc, score in results:
-                    logger.info(f"Retrieved doc metadata: {getattr(doc, 'metadata', None)}, score: {score}")
-                
-                filtered_results = []
-                for doc, score in results:
-                    similarity = 1.0 - score  # Convert distance to similarity score
-                    if similarity >= score_threshold:
-                        if not doc.metadata:
-                            doc.metadata = {}
-                        doc.metadata["score"] = similarity
-                        filtered_results.append(doc)
-                logger.info(f"Search returned {len(filtered_results)} results after filtering by score threshold {score_threshold}")
-                return filtered_results
-            except Exception as e:
-                logger.error(f"Error in vector store search: {str(e)}")
-                # Try a simpler approach if the complex search fails
-                logger.info("Attempting fallback to basic similarity search without scores")
-                try:
-                    basic_results = self.vector_store.similarity_search(query, **search_kwargs)
-                    return basic_results
-                except Exception as e2:
-                    logger.error(f"Fallback search also failed: {str(e2)}")
-                    return []
-                
-        except Exception as e:
-            logger.warning(f"Error in execute_search: {str(e)}")
-            return []
-    
     def get_document(self, document_id: str) -> List[LangchainDocument]:
         """
         Retrieve all chunks for a specific document.

@@ -76,6 +76,8 @@ async def import_jira_project(
     timestamp: str = Query("latest", description="Timestamp of the data directory (use 'latest' for the most recent)"),
     project_id: Optional[str] = Query(None, description="Project ID to associate the document with"),
     conversation_id: Optional[str] = Query(None, description="Conversation ID to associate the document with"),
+    single_document: Optional[bool] = Query(False, description="If True, combine all issues into a single document before chunking. If False, create one document per issue."),
+    chunk_size: Optional[int] = Query(None, description="Chunk size for document splitting when single_document is True. If not provided, uses default chunk size."),
     service: DocumentService = Depends(get_document_service),
     db: Session = Depends(get_db)
 ):
@@ -164,7 +166,9 @@ async def import_jira_project(
                 conversation_id=conversation_id,
                 db_session=db,
                 target_project=project_key,
-                is_summary=False  # Flag to indicate this is not a summary file
+                is_summary=False,  # Flag to indicate this is not a summary file
+                single_document=single_document,  # New parameter for single document processing
+                chunk_size=chunk_size  # New parameter for chunk size
             )
     
     # Return appropriate response based on what was processed

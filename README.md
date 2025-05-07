@@ -2,6 +2,32 @@
 
 A document query application that allows you to upload documents, create projects and conversations, and ask questions about the documents.
 
+## Development with GitHub Codespaces
+
+The easiest way to get started is using GitHub Codespaces:
+
+1. Click the "Code" button on the repository
+2. Select "Create codespace on main"
+3. Wait for the environment to be built (this may take a few minutes)
+4. Once ready, the workspace will open with VS Code in your browser
+5. The backend and frontend dependencies will be automatically installed
+
+### Running the Application in Codespaces
+
+1. Start the backend:
+   ```bash
+   cd backend
+   python run.py
+   ```
+
+2. Start the frontend (in a new terminal):
+   ```bash
+   cd frontend
+   npm start
+   ```
+
+3. Access the application through the "Ports" tab in VS Code
+
 ## Local Development Setup
 
 ### Prerequisites
@@ -216,3 +242,26 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - LangChain for the RAG framework
 - FastAPI for the efficient backend framework
 - React team for the frontend framework 
+
+## Testing
+
+Run the backend tests:
+```bash
+cd backend
+pytest tests/ --cov=app -v
+```
+
+## Deployment
+
+The application is automatically deployed to Azure App Service when changes are pushed to the main branch. The deployment process includes:
+
+1. Running all tests
+2. Building the application
+3. Deploying to Azure App Service
+
+### Required Azure Setup
+
+1. Create an Azure App Service
+2. Set up the following GitHub Secrets:
+   - `AZURE_CREDENTIALS`: Azure service principal credentials
+   - `AZURE_WEBAPP_NAME`: Name of your Azure Web App

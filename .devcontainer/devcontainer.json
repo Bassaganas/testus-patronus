@@ -108,7 +108,7 @@
             "protocol": "https"
         }
     },
-    "postCreateCommand": "pip install -r backend/requirements.txt && mkdir -p backend/data/db backend/data/uploads && cp -n backend/.env.development backend/.env",
+    "postCreateCommand": "pip install -r backend/requirements.txt && mkdir -p backend/data/db backend/data/uploads && cp -n backend/.env.development backend/.env && ./setup-dify.sh",
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "20"

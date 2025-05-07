@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from langchain_openai import AzureChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
@@ -108,9 +108,9 @@ You must answer based strictly on the provided context, which may include Jira i
             logger.error(f"Error in RAG chain: {str(e)}")
             return "I apologize, but I encountered an error processing your request."
 
-    def answer_question(self, question: str, conversation_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
+    async def answer_question(self, question: str, conversation_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
         try:
-            relevant_docs = self.vector_store.similarity_search(
+            relevant_docs = await self.vector_store.similarity_search(
                 question,
                 k=self.DEFAULT_K,
                 conversation_id=conversation_id,
@@ -126,42 +126,47 @@ You must answer based strictly on the provided context, which may include Jira i
             logger.error(f"Error in answer_question: {str(e)}")
             return {"error": str(e), "answer": "I apologize, but I encountered an error while processing your question.", "sources": []}
 
-    async def process_query(self, query: str, documents: List) -> str:
-        logger.info(f"Processing query: '{query[:50]}...' with {len(documents)} documents")
-
-        if not documents:
-            return "I don't have any documents to reference. Please upload some documents to help me provide a more informed response."
-
-        document_ids = [str(doc.id) if hasattr(doc, 'id') else doc for doc in documents]
-
+    async def process_query(
+        self,
+        query: str,
+        project_id: str,
+        similarity_score: Optional[float] = None
+    ) -> str:
+        """
+        Process a query using the RAG chain.
+        
+        Args:
+            query: The query text
+            document_ids: Optional list of document IDs to search through
+            similarity_score: Optional minimum similarity score threshold (0.0 to 1.0)
+                            If not provided, uses DEFAULT_SCORE_THRESHOLD
+            
+        Returns:
+            str: The generated response
+        """
         try:
-            relevant_docs = self.vector_store.similarity_search(
+            # Get relevant documents using default k value
+            docs = await self.vector_store.similarity_search(
                 query=query,
-                k=8,
-                conversation_id=None,
-                project_id=None,
-                score_threshold=0.0
+                project_id=project_id,
+                score_threshold=similarity_score if similarity_score is not None else self.DEFAULT_SCORE_THRESHOLD
             )
-            filtered_docs = [doc for doc in relevant_docs if doc.metadata and doc.metadata.get("document_id") in document_ids]
-            relevant_docs = filtered_docs if filtered_docs else relevant_docs
+            
+            if not docs:
+                return "I couldn't find any relevant information to answer your question."
+                
+            # Generate response using the documents
+            response = await self.qa_chain.ainvoke({
+                "context": docs,
+                "question": query,
+                "chat_history": []  # o pasar la carga real si quieres usar history
+            })
+            
+            return response["answer"]
+            
         except Exception as e:
-            logger.error(f"Error in similarity search: {str(e)}")
-            return "I encountered an issue searching through the documents. Please try again or rephrase your question."
-
-        if not relevant_docs:
-            return "I couldn't find any relevant information in the documents to answer your question. Could you please rephrase or ask something else about the documents?"
-
-        try:
-            context = self.format_docs(relevant_docs)
-            messages = [
-                SystemMessage(content="You are a specialized AI assistant that answers questions based on the provided context. If you don't know the answer, just say that you don't know."),
-                HumanMessage(content=f"Context: {context}\n\nQuestion: {query}")
-            ]
-            response = self.llm.invoke(messages)
-            return response.content
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return "I encountered an issue generating a response. Please try again."
+            logger.error(f"Error in RAG chain: {str(e)}")
+            return "I encountered an error while processing your query."
 
     def _load_chat_history(self, conversation_id: Optional[str]) -> List:
         if not conversation_id:

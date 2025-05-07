@@ -1,10 +1,10 @@
 import pytest
 from datetime import datetime
 from unittest.mock import Mock, patch
-from app.models import Project, ProjectCreate, ProjectUpdate
-from app.repositories.project import ProjectRepository
-from app.services.project_service import ProjectService
-from app.api.v1.exceptions import NotFoundError, ValidationError
+from app.domain.models.project import Project
+from app.domain.schemas.project import ProjectCreate, ProjectUpdate
+from app.infrastructure.repositories.project_repository import ProjectRepository
+from app.application.services.project_service import ProjectService
 
 @pytest.fixture
 def mock_db():

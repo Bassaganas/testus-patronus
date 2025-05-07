@@ -8,6 +8,8 @@ import logging
 from app.main import app
 from app.infrastructure.database.session import get_db
 
+# Add pytest-asyncio marker to the module
+pytestmark = pytest.mark.asyncio
 
 logging.basicConfig(
     level=logging.INFO,

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationResponse, MessageBase
 from app.application.services.conversation_service import ConversationService
@@ -245,6 +245,7 @@ async def remove_document(
 
 class QueryRequest(BaseModel):
     query: str
+    similarity_score: Optional[float] = Field(None, description="Minimum similarity score threshold for document retrieval (0.0 to 1.0)")
 
 @router.post(
     "/{conversation_id}/query",
@@ -254,7 +255,7 @@ class QueryRequest(BaseModel):
 )
 async def query_conversation(
     conversation_id: UUID,
-    request: QueryRequest,
+    request: Optional[QueryRequest],
     service: ConversationService = Depends(get_conversation_service)
 ):
     """
@@ -266,7 +267,7 @@ async def query_conversation(
     
     Args:
         conversation_id: Conversation ID
-        request: QueryRequest containing the query text
+        request: QueryRequest containing the query text and optional similarity score
         service: Conversation service
         
     Returns:
@@ -277,7 +278,11 @@ async def query_conversation(
         ValidationException: If no documents are found
     """
     try:
-        return await service.query_conversation(conversation_id, request.query)
+        return await service.query_conversation(
+            conversation_id, 
+            request.query,
+            similarity_score=request.similarity_score
+        )
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValidationException as e:

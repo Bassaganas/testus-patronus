@@ -73,3 +73,5 @@ tmp/
 # System Files
 .DS_Store
 Thumbs.db 
+dataset_old/*
+dify/*

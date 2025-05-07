@@ -29,6 +29,28 @@
             }
         },
         {
+            "name": "Python: Run Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration",
+                "-v",
+                "--junitxml=test-results.xml"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "envFile": "${workspaceFolder}/backend/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "hidden": false,
+                "group": "Backend",
+                "order": 2
+            }
+        },
+        {
             "name": "Python: Run Tests",
             "type": "python",
             "request": "launch",
@@ -136,7 +158,8 @@
             "module": "pytest",
             "args": [
                 "tests/integration/test_jira_and_vector_api.py",
-                "-v"
+                "-v",
+                "--junitxml=test-results.xml"
             ],
             "cwd": "${workspaceFolder}/backend",
             "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
@@ -161,7 +184,8 @@
             "module": "pytest",
             "args": [
                 "tests/integration/test_rag_queries.py",
-                "-v"
+                "-v",
+                "--junitxml=test-results.xml"
             ],
             "cwd": "${workspaceFolder}/backend",
             "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
@@ -186,7 +210,8 @@
             "module": "pytest",
             "args": [
                 "tests/integration/test_conversation_api.py",
-                "-v"
+                "-v",
+                "--junitxml=test-results.xml"
             ],
             "cwd": "${workspaceFolder}/backend",
             "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
@@ -203,7 +228,51 @@
                 "group": "Backend",
                 "order": 3
             }
-        }
+        },
+        {
+            "name": "Python: Debug Integration Tests RAG Quality",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/test_rag_quality.py",
+                "-v",
+                "--junitxml=test-results.xml"
+            ],
+            "cwd": "${workspaceFolder}/backend",
+            "envFile": "${workspaceFolder}/backend/tests/integration/.env.integration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "purpose": [
+                "debug-test"
+            ],
+            "presentation": {
+                "hidden": false,
+                "group": "Backend",
+                "order": 3
+            }
+        },
+        {
+            "name": "Python: Dify Jira Connector",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/dify_jira_connector/example.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "python": "${workspaceFolder}/dify_jira_connector/venv/bin/python",
+            "presentation": {
+                "hidden": false,
+                "group": "Development",
+                "order": 2
+            }
+        },
     ],
     "compounds": [
         {

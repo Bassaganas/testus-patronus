@@ -201,4 +201,14 @@ Run tests using the VS Code Debug panel:
 Or via terminal:
 ```bash
 pytest -v --cov=app --cov-report=term-missing
-``` 
+```
+
+## Database Initialization
+
+Before running the backend for the first time, you must initialize the database to create all required tables and schemas. Run the following command from the `backend` directory:
+
+```sh
+PYTHONPATH=. python app/infrastructure/database/init_db.py
+```
+
+This will create all necessary tables and seed the database with a default project if needed. 

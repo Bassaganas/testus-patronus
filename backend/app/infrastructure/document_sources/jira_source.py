@@ -56,7 +56,7 @@ class JiraProcessor:
         return projects
     
     async def process_jira_data(self, data: List[Dict[str, Any]], file_name: str, db_session, project_id: Optional[str] = None, 
-                              conversation_id: Optional[str] = None, target_project: Optional[str] = None, is_summary: bool = False) -> str:
+                              conversation_id: Optional[str] = None, target_project: Optional[str] = None, is_summary: bool = False, single_document: Optional[bool] = False, chunk_size: Optional[int] = 400) -> str:
         """
         Process Jira data and store each issue as a separate document in the vector store.
         

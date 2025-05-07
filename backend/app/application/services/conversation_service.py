@@ -73,7 +73,7 @@ class ConversationService:
         conversation = await self.get_conversation_by_id(conversation_id)
         return await self.repository.remove_document(conversation_id, document_id)
         
-    async def query_conversation(self, conversation_id: UUID, query: str) -> str:
+    async def query_conversation(self, conversation_id: UUID, query: str, similarity_score: Optional[float] = None) -> str:
         """
         Query a conversation using RAG, fetching documents from both:
         1. The conversation's explicitly added documents
@@ -82,6 +82,7 @@ class ConversationService:
         Args:
             conversation_id: The ID of the conversation
             query: The query text
+            similarity_score: Optional minimum similarity score threshold for document retrieval (0.0 to 1.0)
             
         Returns:
             str: Response from the RAG chain
@@ -98,61 +99,9 @@ class ConversationService:
         # Get project_id from the conversation
         project_id = conversation.project_id
         
-        # Initialize an empty set to avoid duplicates
-        document_ids = set()
-        
-        # 1. Get documents explicitly added to this conversation
-        if conversation.documents:
-            for doc_id in conversation.documents:
-                document_ids.add(str(doc_id))
-                print(f"Added document {doc_id} from conversation {conversation_id}")
-        
-        # 2. Get all documents from the project (if they're not already included)
-        if project_id:
-            try:
-                # Get documents associated with the project
-                project_documents = await self.document_repository.get_by_project(project_id)
-                for doc in project_documents:
-                    doc_id_str = str(doc.id)
-                    document_ids.add(doc_id_str)
-                    print(f"Added document {doc_id_str} from project {project_id}")
-            except Exception as e:
-                print(f"Error fetching project documents: {e}")
-        
-        # Convert set back to list
-        document_id_list = list(document_ids)
-        print(f"Documents IDs for query: {document_id_list}")
-        
-        # Check if we have any documents
-        if not document_id_list:
-            raise ValidationException("No documents found for this conversation or its project")
-        
-        # Get document objects from the repository
-        # This will help the RAG chain access document content and metadata
-        documents = []
         try:
-            for doc_id in document_id_list:
-                try:
-                    doc = await self.document_repository.get_by_id(doc_id)
-                    if doc:
-                        documents.append(doc)
-                        print(f"Retrieved document {doc_id} from repository")
-                except Exception as e:
-                    print(f"Error retrieving document {doc_id}: {e}")
-        except Exception as e:
-            print(f"Error preparing documents: {e}")
-        
-        # Also pass the raw document IDs as strings in case the document objects
-        # are not properly recognized by the vector store
-        document_id_strings = [str(doc_id) for doc_id in document_id_list]
-        
-        # If we have document objects, pass those, otherwise fallback to ID strings
-        docs_to_query = documents if documents else document_id_strings
-        print(f"Passing {len(docs_to_query)} documents to RAG chain")
-        
-        try:
-            # Query the RAG chain with all available documents
-            response = await self.rag_chain.process_query(query, docs_to_query)
+            # Query the RAG chain with all available documents and similarity score
+            response = await self.rag_chain.process_query(query, project_id, similarity_score=similarity_score)
             
             # Add the assistant's response to the conversation
             await self.add_message(conversation_id, "assistant", response)
