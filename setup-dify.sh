@@ -8,6 +8,32 @@ NC='\033[0m' # No Color
 
 echo -e "${YELLOW}Setting up Dify project...${NC}"
 
+# Check if running in Codespaces
+if [ -n "$CODESPACES" ]; then
+    echo -e "${YELLOW}Running in GitHub Codespaces environment${NC}"
+    
+    # Check Docker permissions
+    if ! docker info > /dev/null 2>&1; then
+        echo -e "${RED}Docker is not accessible. Please ensure Docker is running and you have the necessary permissions.${NC}"
+        echo -e "${YELLOW}You may need to add the following to your devcontainer.json:${NC}"
+        echo -e '{
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    }
+}'
+        exit 1
+    fi
+
+    # Check network connectivity
+    echo -e "${YELLOW}Checking network connectivity...${NC}"
+    if ! curl -s --connect-timeout 5 https://github.com > /dev/null; then
+        echo -e "${RED}Network connectivity check failed.${NC}"
+        echo -e "${YELLOW}Please ensure your Codespace has network access.${NC}"
+        echo -e "${YELLOW}You may need to configure a proxy or check your network settings.${NC}"
+        exit 1
+    fi
+fi
+
 # Check if Dify directory already exists
 if [ -d "dify" ]; then
     echo -e "${YELLOW}Dify directory already exists.${NC}"
@@ -41,6 +67,25 @@ else
     exit 1
 fi
 
+# Configure proxy settings for Docker if in Codespaces
+if [ -n "$CODESPACES" ]; then
+    echo -e "${YELLOW}Configuring Docker proxy settings...${NC}"
+    # Create or update Docker daemon configuration
+    sudo mkdir -p /etc/docker
+    echo '{
+        "proxies": {
+            "default": {
+                "httpProxy": "http://proxy:3128",
+                "httpsProxy": "http://proxy:3128",
+                "noProxy": "localhost,127.0.0.1"
+            }
+        }
+    }' | sudo tee /etc/docker/daemon.json > /dev/null
+    
+    # Restart Docker daemon to apply proxy settings
+    sudo systemctl restart docker
+fi
+
 # Start Docker containers
 echo -e "${YELLOW}Starting Docker containers...${NC}"
 if command -v docker-compose &> /dev/null; then
@@ -64,7 +109,20 @@ fi
 
 echo -e "${GREEN}Dify setup completed!${NC}"
 echo -e "${YELLOW}Next steps:${NC}"
-echo -e "1. Access the administrator initialization page at: ${GREEN}http://localhost/install${NC}"
-echo -e "2. Set up your admin account"
-echo -e "3. Access the Dify web interface at: ${GREEN}http://localhost${NC}"
-echo -e "${YELLOW}Note: Make sure Docker Desktop is running and has at least 2 vCPUs and 8GB of memory allocated.${NC}" 
+
+# Adjust URLs based on environment
+if [ -n "$CODESPACES" ]; then
+    echo -e "1. Access the administrator initialization page at: ${GREEN}https://$CODESPACE_NAME-80.preview.app.github.dev/install${NC}"
+    echo -e "2. Set up your admin account"
+    echo -e "3. Access the Dify web interface at: ${GREEN}https://$CODESPACE_NAME-80.preview.app.github.dev${NC}"
+    echo -e "${YELLOW}Note: If you encounter network issues, you may need to:${NC}"
+    echo -e "   - Configure your Codespace to use a proxy"
+    echo -e "   - Add necessary environment variables to your .env file"
+    echo -e "   - Check the Docker container logs for any network-related errors"
+else
+    echo -e "1. Access the administrator initialization page at: ${GREEN}http://localhost/install${NC}"
+    echo -e "2. Set up your admin account"
+    echo -e "3. Access the Dify web interface at: ${GREEN}http://localhost${NC}"
+fi
+
+echo -e "${YELLOW}Note: Make sure Docker is running and has sufficient resources allocated.${NC}" 
